@@ -251,10 +251,13 @@ def process_cesm_data(gdir, filesuffix='', fpath_temp=None, fpath_precc=None,
     ts_tmp_avg = temp.sel(time=(temp.year >= 1961) & (temp.year <= 1990))
     ts_tmp_avg = ts_tmp_avg.groupby(ts_tmp_avg.month).mean(dim='time')
     ts_tmp = temp.groupby(temp.month) - ts_tmp_avg
-    # of precip
+    # of precip -- scaled anomalies
     ts_pre_avg = precp.isel(time=(precp.year >= 1961) & (precp.year <= 1990))
     ts_pre_avg = ts_pre_avg.groupby(ts_pre_avg.month).mean(dim='time')
-    ts_pre = precp.groupby(precp.month) - ts_pre_avg
+    ts_pre_ano = precp.groupby(precp.month) - ts_pre_avg
+    # scaled anomalies is the default. Standard anomalies above
+    # are used later for where ts_pre_avg == 0
+    ts_pre = precp.groupby(precp.month) / ts_pre_avg
 
     # Get CRU to apply the anomaly to
     fpath = gdir.get_filepath('climate_monthly')
@@ -270,7 +273,16 @@ def process_cesm_data(gdir, filesuffix='', fpath_temp=None, fpath_precc=None,
     ts_tmp = ts_tmp.groupby(ts_tmp.month) + loc_tmp
     # for prcp
     loc_pre = dscru.prcp.groupby('time.month').mean()
-    ts_pre = ts_pre.groupby(ts_pre.month) + loc_pre
+    # scaled anomalies
+    ts_pre = ts_pre.groupby(ts_pre.month) * loc_pre
+    # standard anomalies
+    ts_pre_ano = ts_pre_ano.groupby(ts_pre_ano.month) + loc_pre
+    # Correct infinite values with standard anomalies
+    ts_pre.values = np.where(np.isfinite(ts_pre.values),
+                             ts_pre.values,
+                             ts_pre_ano.values)
+    # The last step might create negative values (unlikely). Clip them
+    ts_pre.values = ts_pre.values.clip(0)
 
     # load dates in right format to save
     dsindex = salem.GeoNetcdf(fpath_temp, monthbegin=True)
@@ -388,7 +400,7 @@ def process_cru_data(gdir):
     ts_grad = np.clip(ts_grad, g_minmax[0], g_minmax[1])
     # convert to timeserie and hydroyears
     ts_grad = ts_grad.tolist()
-    ts_grad = ts_grad[9:] + ts_grad[0:9]
+    ts_grad = ts_grad[em:] + ts_grad[0:em]
     ts_grad = np.asarray(ts_grad * ny)
 
     # maybe this will throw out of bounds warnings
@@ -405,7 +417,10 @@ def process_cru_data(gdir):
     ts_pre = nc_ts_pre.get_vardata('pre', as_xarray=True)
     ts_pre_avg = ts_pre.sel(time=slice('1961-01-01', '1990-12-01'))
     ts_pre_avg = ts_pre_avg.groupby('time.month').mean(dim='time')
-    ts_pre = ts_pre.groupby('time.month') - ts_pre_avg
+    ts_pre_ano = ts_pre.groupby('time.month') - ts_pre_avg
+    # scaled anomalies is the default. Standard anomalies above
+    # are used later for where ts_pre_avg == 0
+    ts_pre = ts_pre.groupby('time.month') / ts_pre_avg
 
     # interpolate to HR grid
     if np.any(~np.isfinite(ts_tmp[:, 1, 1])):
@@ -417,6 +432,7 @@ def process_cru_data(gdir):
                 if np.all(np.isfinite(ts_tmp[:, idj, idi])):
                     ts_tmp[:, 1, 1] = ts_tmp[:, idj, idi]
                     ts_pre[:, 1, 1] = ts_pre[:, idj, idi]
+                    ts_pre_ano[:, 1, 1] = ts_pre_ano[:, idj, idi]
                     found_it = True
         if not found_it:
             msg = '({}) there is no climate data'.format(gdir.rgi_id)
@@ -427,12 +443,18 @@ def process_cru_data(gdir):
                                               interp='nearest')
         ts_pre = ncclim.grid.map_gridded_data(ts_pre.values, nc_ts_pre.grid,
                                               interp='nearest')
+        ts_pre_ano = ncclim.grid.map_gridded_data(ts_pre_ano.values,
+                                                  nc_ts_pre.grid,
+                                                  interp='nearest')
     else:
         # We can do bilinear
         ts_tmp = ncclim.grid.map_gridded_data(ts_tmp.values, nc_ts_tmp.grid,
                                               interp='linear')
         ts_pre = ncclim.grid.map_gridded_data(ts_pre.values, nc_ts_pre.grid,
                                               interp='linear')
+        ts_pre_ano = ncclim.grid.map_gridded_data(ts_pre_ano.values,
+                                                  nc_ts_pre.grid,
+                                                  interp='linear')
 
     # take the center pixel and add it to the CRU CL clim
     # for temp
@@ -446,7 +468,18 @@ def process_cru_data(gdir):
                            coords={'month': ts_pre_avg.month})
     ts_pre = xr.DataArray(ts_pre[:, 1, 1], dims=['time'],
                           coords={'time': time})
-    ts_pre = ts_pre.groupby('time.month') + loc_pre
+    ts_pre_ano = xr.DataArray(ts_pre_ano[:, 1, 1], dims=['time'],
+                              coords={'time': time})
+    # scaled anomalies
+    ts_pre = ts_pre.groupby('time.month') * loc_pre
+    # standard anomalies
+    ts_pre_ano = ts_pre_ano.groupby('time.month') + loc_pre
+    # Correct infinite values with standard anomalies
+    ts_pre.values = np.where(np.isfinite(ts_pre.values),
+                             ts_pre.values,
+                             ts_pre_ano.values)
+    # The last step might create negative values (unlikely). Clip them
+    ts_pre.values = ts_pre.values.clip(0)
 
     # done
     loc_hgt = loc_hgt[1, 1]
@@ -819,7 +852,8 @@ def calving_mb(gdir):
 
 
 @entity_task(log, writes=['local_mustar'])
-def local_mustar(gdir, tstar=None, bias=None, prcp_fac=None):
+def local_mustar(gdir, tstar=None, bias=None, prcp_fac=None,
+                 minimum_mustar=0.):
     """Compute the local mustar from interpolated tstars.
 
     Parameters
@@ -831,6 +865,10 @@ def local_mustar(gdir, tstar=None, bias=None, prcp_fac=None):
         the associated reference bias
     prcp_fac: int
         the associated precipitation factor
+    minimum_mustar: float
+        if mustar goes below this threshold, clip it to that value.
+        If you want this to happen with `minimum_mustar=0.` you will have
+        to set `cfg.PARAMS['allow_negative_mustar']=True` first.
     """
 
     assert bias is not None
@@ -855,6 +893,11 @@ def local_mustar(gdir, tstar=None, bias=None, prcp_fac=None):
     mustar = (np.mean(prcp_yr) - cmb) / np.mean(temp_yr)
     if not np.isfinite(mustar):
         raise RuntimeError('{} has a non finite mu'.format(gdir.rgi_id))
+    if not cfg.PARAMS['allow_negative_mustar']:
+        if mustar < 0:
+            raise RuntimeError('{} has a negative mu'.format(gdir.rgi_id))
+    # For the calving param it might be useful to clip the mu
+    mustar = np.clip(mustar, minimum_mustar, np.max(mustar))
 
     # Scalars in a small dataframe for later
     df = pd.DataFrame()
@@ -1137,13 +1180,20 @@ def compute_ref_t_stars(gdirs):
 
 
 @global_task
-def distribute_t_stars(gdirs, ref_df=None):
+def distribute_t_stars(gdirs, ref_df=None, minimum_mustar=0.):
     """After the computation of the reference tstars, apply
     the interpolation to each individual glacier.
 
     Parameters
     ----------
-    gdirs : list of oggm.GlacierDirectory objects
+    gdirs : []
+        list of oggm.GlacierDirectory objects
+    ref_df : pd.Dataframe
+        replace the default calibration list
+    minimum_mustar: float
+        if mustar goes below this threshold, clip it to that value.
+        If you want this to happen with `minimum_mustar=0.` you will have
+        to set `cfg.PARAMS['allow_negative_mustar']=True` first.
     """
 
     log.info('Distribute t* and mu*')
@@ -1183,7 +1233,7 @@ def distribute_t_stars(gdirs, ref_df=None):
 
         # Go
         local_mustar(gdir, tstar=tstar, bias=bias, prcp_fac=prcp_fac,
-                     reset=True)
+                     reset=True, minimum_mustar=minimum_mustar)
 
 
 @global_task
