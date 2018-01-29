@@ -19,13 +19,13 @@ import salem
 import xarray as xr
 
 # Local imports
-from oggm.core import gis, inversion, climate, centerlines, flowline, \
-    massbalance
+from oggm.core import (gis, inversion, climate, centerlines, flowline,
+                       massbalance)
 import oggm.cfg as cfg
 from oggm import utils
 from oggm.utils import get_demo_file, tuple2int
 from oggm.tests import is_slow, RUN_PREPRO_TESTS
-from oggm.tests.funcs import get_test_dir, patch_url_retrieve
+from oggm.tests.funcs import get_test_dir, patch_url_retrieve_github
 from oggm import workflow
 
 # do we event want to run the tests?
@@ -37,7 +37,7 @@ _url_retrieve = None
 
 def setup_module(module):
     module._url_retrieve = utils._urlretrieve
-    utils._urlretrieve = patch_url_retrieve
+    utils._urlretrieve = patch_url_retrieve_github
 
 
 def teardown_module(module):
@@ -78,6 +78,7 @@ class TestGIS(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PATHS['dem_file'] = get_demo_file('hef_srtm.tif')
         cfg.PATHS['working_dir'] = self.testdir
 
@@ -227,6 +228,7 @@ class TestCenterlines(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PATHS['dem_file'] = get_demo_file('hef_srtm.tif')
         cfg.PARAMS['border'] = 10
 
@@ -444,6 +446,7 @@ class TestGeometry(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PATHS['dem_file'] = get_demo_file('hef_srtm.tif')
         cfg.PARAMS['border'] = 10
 
@@ -570,10 +573,16 @@ class TestGeometry(unittest.TestCase):
         h2, b = np.histogram(rhgt, density=True, bins=bins)
         self.assertTrue(utils.rmsd(h1*100*50, h2*100*50) < 1)
 
+        # Check that utility function is doing what is expected
+        hh, ww = gdir.get_inversion_flowline_hw()
+        new_area = np.sum(ww * cl.dx * gdir.grid.dx)
+        np.testing.assert_allclose(new_area * 10**-6, np.float(tdf['AREA']))
+
     def test_nodivides_correct_slope(self):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PATHS['dem_file'] = get_demo_file('hef_srtm.tif')
         cfg.PATHS['climate_file'] = get_demo_file('histalp_merged_hef.nc')
         cfg.PARAMS['border'] = 40
@@ -610,6 +619,7 @@ class TestClimate(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PATHS['working_dir'] = self.testdir
         cfg.PATHS['dem_file'] = get_demo_file('hef_srtm.tif')
         cfg.PATHS['climate_file'] = get_demo_file('histalp_merged_hef.nc')
@@ -1289,6 +1299,7 @@ class TestFilterNegFlux(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PATHS['working_dir'] = self.testdir
         cfg.PATHS['dem_file'] = get_demo_file('srtm_oetztal.tif')
         cfg.PATHS['climate_file'] = get_demo_file('HISTALP_oetztal.nc')
@@ -1346,6 +1357,7 @@ class TestInversion(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PATHS['working_dir'] = self.testdir
         cfg.PATHS['dem_file'] = get_demo_file('hef_srtm.tif')
         cfg.PATHS['climate_file'] = get_demo_file('histalp_merged_hef.nc')
@@ -1768,6 +1780,7 @@ class TestGrindelInvert(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PARAMS['use_multiple_flowlines'] = False
         # not crop
         cfg.PARAMS['max_thick_to_width_ratio'] = 10
@@ -1928,6 +1941,7 @@ class TestGCMClimate(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PATHS['working_dir'] = self.testdir
         cfg.PATHS['dem_file'] = get_demo_file('hef_srtm.tif')
         cru_dir = get_demo_file('cru_ts3.23.1901.2014.tmp.dat.nc')
@@ -2014,8 +2028,8 @@ class TestGCMClimate(unittest.TestCase):
                 scesm2 = scesm2.groupby(scesm2.month).mean()
                 # No more than one degree? (silly test)
                 np.testing.assert_allclose(scesm1.temp, scesm2.temp, atol=1)
-                # N more than 20%? (silly test)
-                np.testing.assert_allclose(scesm1.prcp, scesm2.prcp, rtol=0.2)
+                # N more than 30%? (silly test)
+                np.testing.assert_allclose(scesm1.prcp, scesm2.prcp, rtol=0.3)
 
     def test_compile_climate_input(self):
 
@@ -2096,6 +2110,7 @@ class TestCatching(unittest.TestCase):
 
         # Init
         cfg.initialize()
+        cfg.set_intersects_db(get_demo_file('rgi_intersect_oetztal.shp'))
         cfg.PARAMS['use_multiprocessing'] = False
         cfg.PATHS['dem_file'] = get_demo_file('hef_srtm.tif')
         cfg.PATHS['working_dir'] = self.testdir

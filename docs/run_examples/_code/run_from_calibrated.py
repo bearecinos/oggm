@@ -40,10 +40,8 @@ cfg.PARAMS['border'] = 100
 cfg.PARAMS['continue_on_error'] = False
 
 # We use intersects
-# (this is slow, it could be replaced with a subset of the global file)
-rgi_dir = utils.get_rgi_intersects_dir(version='5')
-cfg.set_intersects_db(path.join(rgi_dir, '00_rgi50_AllRegs',
-                                'intersects_rgi50_AllRegs.shp'))
+# Here we use the global file but there are regional files too (faster)
+cfg.set_intersects_db(utils.get_rgi_intersects_region_file('00', version='5'))
 
 # Pre-download other files which will be needed later
 utils.get_cru_cl_file()
@@ -53,7 +51,7 @@ utils.get_cru_file(var='pre')
 # Download the RGI file for the run
 # We us a set of four glaciers here but this could be an entire RGI region,
 # or any glacier list you'd like to model
-dl = 'https://www.dropbox.com/s/6cwi7b4q4zqgh4a/RGI_example_glaciers.zip?dl=1'
+dl = 'https://cluster.klima.uni-bremen.de/~fmaussion/misc/RGI_example_glaciers.zip'
 with zipfile.ZipFile(utils.file_downloader(dl)) as zf:
     zf.extractall(WORKING_DIR)
 rgidf = salem.read_shapefile(path.join(WORKING_DIR, 'RGI_example_glaciers',
