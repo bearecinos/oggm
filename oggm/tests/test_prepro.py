@@ -25,7 +25,7 @@ import oggm.cfg as cfg
 from oggm import utils
 from oggm.utils import get_demo_file, tuple2int
 from oggm.tests import is_slow, RUN_PREPRO_TESTS
-from oggm.tests.funcs import get_test_dir, patch_url_retrieve
+from oggm.tests.funcs import get_test_dir, patch_url_retrieve_github
 from oggm import workflow
 
 # do we event want to run the tests?
@@ -37,7 +37,7 @@ _url_retrieve = None
 
 def setup_module(module):
     module._url_retrieve = utils._urlretrieve
-    utils._urlretrieve = patch_url_retrieve
+    utils._urlretrieve = patch_url_retrieve_github
 
 
 def teardown_module(module):
@@ -2028,8 +2028,8 @@ class TestGCMClimate(unittest.TestCase):
                 scesm2 = scesm2.groupby(scesm2.month).mean()
                 # No more than one degree? (silly test)
                 np.testing.assert_allclose(scesm1.temp, scesm2.temp, atol=1)
-                # N more than 20%? (silly test)
-                np.testing.assert_allclose(scesm1.prcp, scesm2.prcp, rtol=0.2)
+                # N more than 30%? (silly test)
+                np.testing.assert_allclose(scesm1.prcp, scesm2.prcp, rtol=0.3)
 
     def test_compile_climate_input(self):
 

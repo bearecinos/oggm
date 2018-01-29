@@ -16,14 +16,14 @@ import oggm
 from oggm import utils
 from oggm import cfg
 from oggm.tests import is_download
-from oggm.tests.funcs import get_test_dir, patch_url_retrieve, init_hef
+from oggm.tests.funcs import get_test_dir, patch_url_retrieve_github, init_hef
 
 _url_retrieve = None
 
 
 def setup_module(module):
     module._url_retrieve = utils._urlretrieve
-    utils._urlretrieve = patch_url_retrieve
+    utils._urlretrieve = patch_url_retrieve_github
 
 
 def teardown_module(module):
@@ -397,7 +397,6 @@ class TestFakeDownloads(unittest.TestCase):
         assert os.path.exists(rgi_f)
         assert '01_rgi60_Region.shp' in rgi_f
 
-
     def test_rgi_intersects(self):
 
         # Make a fake RGI file
@@ -405,16 +404,24 @@ class TestFakeDownloads(unittest.TestCase):
         utils.mkdir(rgi_dir)
         make_fake_zipdir(os.path.join(rgi_dir, 'RGI_V5_Intersects'),
                          fakefile='Intersects_OGGM_Manifest.txt')
+        make_fake_zipdir(os.path.join(rgi_dir, 'RGI_V5_Intersects',
+                                      '11_rgi50_CentralEurope'),
+                         fakefile='intersects_11_rgi50_CentralEurope.shp')
+        make_fake_zipdir(os.path.join(rgi_dir, 'RGI_V5_Intersects',
+                                      '00_rgi50_AllRegs'),
+                         fakefile='intersects_rgi50_AllRegs.shp')
         rgi_f = make_fake_zipdir(rgi_dir)
 
         def down_check(url, cache_name=None, reset=False):
-            expected = ('https://www.dropbox.com/s/y73sdxygdiq7whv/' +
-                        'RGI_V5_Intersects.zip?dl=1')
+            expected = ('https://cluster.klima.uni-bremen.de/~fmaussion/rgi/' +
+                        'RGI_V5_Intersects.zip')
             self.assertEqual(url, expected)
             return rgi_f
 
         with FakeDownloadManager('_progress_urlretrieve', down_check):
             rgi = utils.get_rgi_intersects_dir()
+            utils.get_rgi_intersects_region_file('11', version='5')
+            utils.get_rgi_intersects_region_file('00', version='5')
 
         assert os.path.isdir(rgi)
         assert os.path.exists(os.path.join(rgi,
@@ -428,8 +435,8 @@ class TestFakeDownloads(unittest.TestCase):
         rgi_f = make_fake_zipdir(rgi_dir)
 
         def down_check(url, cache_name=None, reset=False):
-            expected = ('https://www.dropbox.com/s/vawryxl8lkzxowu/' +
-                        'RGI_V6_Intersects.zip?dl=1')
+            expected = ('https://cluster.klima.uni-bremen.de/~fmaussion/rgi/' +
+                        'RGI_V6_Intersects.zip')
             self.assertEqual(url, expected)
             return rgi_f
 
@@ -549,10 +556,12 @@ class TestDataFiles(unittest.TestCase):
         cfg.PATHS['working_dir'] = os.path.join(self.dldir, 'wd')
         cfg.PATHS['tmp_dir'] = os.path.join(self.dldir, 'extract')
         self.reset_dir()
+        utils._urlretrieve = _url_retrieve
 
     def tearDown(self):
         if os.path.exists(self.dldir):
             shutil.rmtree(self.dldir)
+        utils._urlretrieve = patch_url_retrieve_github
 
     def reset_dir(self):
         if os.path.exists(self.dldir):
@@ -815,9 +824,9 @@ class TestDataFiles(unittest.TestCase):
         tmp = cfg.PATHS['rgi_dir']
         cfg.PATHS['rgi_dir'] = os.path.join(self.dldir, 'rgi_extract')
 
-        of = utils.get_rgi_intersects_dir()
-        of = os.path.join(of, '01_rgi50_Alaska',
-                          'intersects_01_rgi50_Alaska.shp')
+        of = utils.get_rgi_intersects_dir(version='6')
+        of = os.path.join(of, '01_rgi60_Alaska',
+                          'intersects_01_rgi60_Alaska.shp')
         self.assertTrue(os.path.exists(of))
 
         cfg.PATHS['rgi_dir'] = tmp

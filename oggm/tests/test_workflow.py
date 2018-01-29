@@ -23,7 +23,7 @@ from oggm.utils import get_demo_file, rmsd, write_centerlines_to_shape
 from oggm.tests import is_slow, RUN_WORKFLOW_TESTS
 from oggm.tests import is_graphic_test, BASELINE_DIR
 from oggm.tests.funcs import (get_test_dir, use_multiprocessing,
-                              patch_url_retrieve)
+                              patch_url_retrieve_github)
 from oggm.core import flowline, massbalance
 from oggm import tasks
 from oggm import utils
@@ -41,7 +41,7 @@ _url_retrieve = None
 
 def setup_module(module):
     module._url_retrieve = utils._urlretrieve
-    utils._urlretrieve = patch_url_retrieve
+    utils._urlretrieve = patch_url_retrieve_github
 
 
 def teardown_module(module):
@@ -243,6 +243,7 @@ class TestWorkflow(unittest.TestCase):
                   'tstar_avg_temp_mean_elev']].corr().values[0, 1]
         assert cc < -0.8
         assert np.all(dfc.t_star > 1900)
+        assert np.all(dfc.tstar_aar.mean() > 0.5)
 
     @is_slow
     def test_crossval(self):
@@ -317,7 +318,7 @@ class TestWorkflow(unittest.TestCase):
         # Just to increase coveralls, hehe
         gdirs = up_to_climate()
         fpath = os.path.join(TEST_DIR, 'centerlines.shp')
-        write_centerlines_to_shape(gdirs, fpath)
+        write_centerlines_to_shape(gdirs, path=fpath)
 
         import salem
         shp = salem.read_shapefile(fpath)
