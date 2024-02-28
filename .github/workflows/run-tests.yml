@@ -24,11 +24,11 @@ jobs:
           - workflow-multi
           - graphics-mpl
         container:
-          - ghcr.io/oggm/untested_base:20220902
-          - ghcr.io/oggm/untested_base:py3.8
+          - ghcr.io/oggm/untested_base:20231004
+          - ghcr.io/oggm/untested_base:py3.10
           - ghcr.io/oggm/untested_base:py3.9
         include:
-          - container: python:3.10-slim
+          - container: python:3.11-slim
             test-env: minimal
     runs-on: ubuntu-latest
     container: ${{ matrix.container }}
@@ -38,11 +38,17 @@ jobs:
         if: ${{ contains(matrix.container, 'slim') }}
         run: apt-get -y update && apt-get -y install git curl
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Fix Git-Permissions
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Test
-        run: ./ci/run_tests.sh ${{ matrix.test-env }}
+        run: ./ci/run_tests.sh "${{ matrix.test-env }}" "${{ matrix.container }}"
+      - name: Upload pytest-mpl artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-mpl-results
+          path: /tmp/oggm-mpl-results/
       - name: Upload Coverage
         if: ${{ !contains(matrix.container, 'py3') }}
         continue-on-error: true
@@ -55,7 +61,7 @@ jobs:
     name: Coveralls Finished
     needs: test
     runs-on: ubuntu-latest
-    container: python:3.9-slim
+    container: python:3.11-slim
     continue-on-error: true
     steps:
     - name: Coveralls Finished

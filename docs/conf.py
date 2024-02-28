@@ -42,6 +42,11 @@ try:
 except ImportError:
     print("no pandas")
 try:
+    import shapely
+    print("shapely: %s, %s" % (shapely.__version__, shapely.__file__))
+except ImportError:
+    print("no shapely")
+try:
     import geopandas
     print("geopandas: %s, %s" % (geopandas.__version__, geopandas.__file__))
 except ImportError:
@@ -63,11 +68,10 @@ try:
 except ImportError:
     print("no rasterio")
 try:
-    import gdal
     import osgeo.gdal
-    print("gdal: %s, %s" % (osgeo.gdal.__version__, gdal.__file__))
+    print("osgeo.gdal: %s, %s" % (osgeo.gdal.__version__, osgeo.gdal.__file__))
 except ImportError:
-    print("no gdal")
+    print("no osgeo.gdal")
 try:
     import pyproj
     print("pyproj: %s, %s" % (pyproj.__version__, pyproj.__file__))
@@ -117,6 +121,7 @@ extensions = [
     'numpydoc',
     'sphinx.ext.ifconfig',
     'sphinx.ext.viewcode',
+    'sphinx_reredirects',
     'sphinx_togglebutton',
     'IPython.sphinxext.ipython_directive',
     'IPython.sphinxext.ipython_console_highlighting',
@@ -125,6 +130,14 @@ extensions = [
 extlinks = {'issue': ('https://github.com/OGGM/oggm/issues/%s', 'GH'),
             'pull': ('https://github.com/OGGM/oggm/pull/%s', 'PR'),
             }
+
+redirects = {
+    "input-data": "shop.html",
+    "pitfalls": "faq.html",
+    "hub": "cloud.html#oggm-hub",
+    "mass-balance-2012-pergla": "mass-balance-monthly.html",
+    "mass-balance-2012": "mass-balance-16guide.html",
+}
 
 autosummary_generate = True
 
@@ -166,7 +179,6 @@ release = oggm.__version__
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = 'en'
 
 # There are two options for replacing |today|: either, you set today to some
 # non-false value, then it is used:
@@ -217,7 +229,7 @@ html_theme = 'sphinx_book_theme'
 # further.  For a list of options available for each theme, see the
 # documentation.
 html_theme_options = {
-    "logo_only": True,
+    # "logo_only": True,
     "repository_url": "https://github.com/OGGM/oggm",
     "use_repository_button": True,
     "use_issues_button": True,
@@ -412,7 +424,7 @@ intersphinx_mapping = {
 
 # -- OGGM Stuffs ----------------------------------------------------
 
-text_version = ('.. warning:: \n\n'
+text_version = ('.. note:: \n\n'
                 '  **This is the model documentation for users and developers '
                 'as of version {}**. '
                 'For the documentation of the latest (cutting-edge) '
@@ -420,7 +432,7 @@ text_version = ('.. warning:: \n\n'
                 '<http://docs.oggm.org/en/latest/>`_.\n'
                 ''.format(oggm.__version__))
 
-text_dev = ('.. warning:: \n\n'
+text_dev = ('.. note:: \n\n'
             '  **This is the model documentation for users and developers of '
             'the latest (cutting-edge) repository version**. For the '
             'documentation of the latest stable release, visit '

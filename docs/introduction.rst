@@ -4,9 +4,10 @@ Introduction
 The Open Global Glacier Model (OGGM) is an open source modelling framework for
 glaciers. It has been developed since 2014: intermittently at first, and more
 regularly since 2016. Today, OGGM is continuously discussed and updated by a
-team of researchers in various institutions.
+team of international researchers.
 
-Our main aim is to **assist the modelling of the evolution of mountains glaciers at the regional and global scales**.
+Our main aim is to **assist the modelling of the evolution of mountains
+glaciers at the river basin, regional and global scales**.
 
 The OGGM framework offers various solutions to the challenges encountered
 when modelling a large number of glaciers. Here is a non-exhaustive list of
@@ -18,7 +19,7 @@ its features:
     Data preprocessing
       Acquisition, download and processing of a large number of digital
       elevation models, gridded climate datasets, reference datasets for model
-      calibration and validation )such as geodetic mass balance and velocity products),
+      calibration and validation such as geodetic mass balance and velocity products,
       and more...
 
     Climatic mass balance
@@ -44,7 +45,7 @@ its features:
       across platforms and HPCs.
 
     Community
-      Welcoming community of users and developers: get in touch and join us!
+      Welcoming community of users and developers: :ref:`get in touch <contact>` and join us!
 
 Example workflow
 ~~~~~~~~~~~~~~~~

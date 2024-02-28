@@ -1,35 +1,47 @@
 
-A modular open source glacier model in Python
----------------------------------------------
+A modular and open source glacier model
+---------------------------------------
 
-**OGGM is an open source modelling framework** able to simulate past and
-future mass balance, volume and geometry of (almost) any glacier in the world,
-in a fully automated and extensible workflow.
+**OGGM is a cutting-edge open source modelling framework** designed to simulate
+the past and future mass balance, volume, and geometry of glaciers worldwide.
 
-The model can account for glacier geometry (including contributory branches) and
-ships with several glacier evolution models, including
-an explicit ice dynamics module. We rely exclusively on publicly
-available data for calibration and validation. **OGGM is modular and
-supports novel modelling workflows**: it LOVES to be remixed and reused!
+The model features several glacier evolution models, including an explicit ice
+dynamics module accounting for glacier geometry and frontal ablation.
+**With an unwavering commitment to using publicly available data for calibration
+and validation, OGGM is a reliable and readily applicable tool for studying glaciers**.
 
+OGGM is also a modular platform that supports novel modelling workflows,
+**encouraging researchers to create unique models and analyses for their research**.
+Our framework is designed to be flexible and adaptable, making it an
+ideal tool for a wide range of applications in glaciology and related fields.
+
+.. warning::
+
+   OGGM v1.6 is a substantial change to v1.5.3. Among other developments,
+   the mass balance calibration has substantially improved. In order to
+   allow easier and faster developments from the community in the future,
+   several variable names have changed and older workflows are not available
+   anymore. **We recommend our users to switch to 1.6 as soon as
+   possible, but only if they are at the development stage of a study.**
+   Older versions of OGGM will always be available via github and Zenodo,
+   and older documentation pages can be accessed via the interface below.
 
 **This webpage is for the software documentation: for general information about the
 OGGM project and related news, visit** `oggm.org <http://oggm.org>`_.
 
-.. include:: _generated/version_text.txt
+Video presentation
+^^^^^^^^^^^^^^^^^^
 
-
-IARPC presentation (April 2020)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-If you are new to OGGM would like a short introduction, here is a recent
-15' presentation about the project:
+If you are new to OGGM and would like a short introduction, here is a 15'
+presentation from April 2020:
 
 .. raw:: html
 
     <iframe width="672" height="378" src="https://www.youtube.com/embed/ttJMxcwXUjw?start=1270" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
 
+Disclaimer: If you don't have access to youtube from your location, you won't be able to see this video.
 *Slides available* `here <https://oggm.org/framework_talk>`_
+
 
 Overview
 ^^^^^^^^
@@ -44,11 +56,12 @@ Core principles and structure of the OGGM modelling framework.
 * :doc:`inversion`
 * :doc:`frontal-ablation`
 * :doc:`dynamic-spinup`
+* :doc:`whats-new`
 
 .. toctree::
     :maxdepth: 1
     :hidden:
-    :caption: Principles
+    :caption: Overview
 
     introduction.rst
     structure.rst
@@ -58,6 +71,7 @@ Core principles and structure of the OGGM modelling framework.
     inversion.rst
     frontal-ablation.rst
     dynamic-spinup.rst
+    whats-new.rst
 
 Using OGGM
 ^^^^^^^^^^
@@ -67,15 +81,10 @@ How to use the model, with concrete code examples and links to the tutorials.
 * :doc:`cloud`
 * :doc:`installing-oggm`
 * :doc:`getting-started`
-* :doc:`input-data`
-* :doc:`run`
-* :doc:`practicalities`
+* `Tutorials <https://oggm.org/tutorials/stable>`_
 * :doc:`api`
+* :doc:`practicalities`
 * :doc:`faq`
-* :doc:`pitfalls`
-* :doc:`assets`
-* :doc:`hub`
-* :doc:`whats-new`
 
 .. toctree::
     :maxdepth: 1
@@ -85,24 +94,42 @@ How to use the model, with concrete code examples and links to the tutorials.
     cloud.rst
     installing-oggm.rst
     getting-started.rst
-    input-data.rst
-    run.rst
+    Tutorials <https://oggm.org/tutorials/stable>
     api.rst
     practicalities.rst
     faq.rst
-    pitfalls.rst
+
+Datasets and downloads
+^^^^^^^^^^^^^^^^^^^^^^
+
+All the things that OGGM has on offer.
+
+* :doc:`shop`
+* :doc:`climate-data`
+* :doc:`reference-mass-balance-data`
+* :doc:`rgitopo`
+* :doc:`download-projections`
+* :doc:`assets`
+
+.. toctree::
+    :maxdepth: 1
+    :hidden:
+    :caption: Datasets and downloads
+
+    shop.rst
+    climate-data.rst
+    reference-mass-balance-data.rst
+    rgitopo.rst
+    download-projections.rst
     assets.rst
-    hub.rst
-    whats-new.rst
 
 Contributing
 ^^^^^^^^^^^^
 
-Do you want to contribute to the model? You are more than welcome to do so and this is the right place to start.
+Do you want to contribute to the model? This is the right place to start.
 
 * :doc:`citing-oggm`
 * :doc:`add-module`
-* :doc:`oeps`
 * :doc:`contributing`
 
 .. toctree::
@@ -112,7 +139,6 @@ Do you want to contribute to the model? You are more than welcome to do so and t
 
     citing-oggm.rst
     add-module.rst
-    oeps.rst
     contributing.rst
 
 .. _contact:

@@ -42,17 +42,9 @@ except ImportError:
     pass
 try:
     import rasterio
-    try:
-        # rasterio V > 1.0
-        from rasterio.merge import merge as merge_tool
-    except ImportError:
-        from rasterio.tools.merge import merge as merge_tool
+    from rasterio.merge import merge as merge_tool
 except ImportError:
     pass
-try:
-    ModuleNotFoundError
-except NameError:
-    ModuleNotFoundError = ImportError
 
 # Locals
 import oggm.cfg as cfg
@@ -69,18 +61,15 @@ logger = logging.getLogger('.'.join(__name__.split('.')[:-1]))
 # The given commit will be downloaded from github and used as source for
 # all sample data
 SAMPLE_DATA_GH_REPO = 'OGGM/oggm-sample-data'
-SAMPLE_DATA_COMMIT = 'f94ba47fc7c3d0355b806e622e330106e08cc16f'
-
-GDIR_L1L2_URL = ('https://cluster.klima.uni-bremen.de/~oggm/gdirs/oggm_v1.4/'
-                 'L1-L2_files/centerlines/')
-GDIR_L3L5_URL = ('https://cluster.klima.uni-bremen.de/~oggm/gdirs/oggm_v1.4/'
-                 'L3-L5_files/CRU/centerlines/qc3/pcp2.5/no_match/')
-DEMS_GDIR_URL = ('https://cluster.klima.uni-bremen.de/~oggm/gdirs/oggm_v1.4/'
-                 'rgitopo/')
+SAMPLE_DATA_COMMIT = '56aa8f23e3b450e6f56a8d4e8a5cdb58e03c9cc1'
 
 CHECKSUM_URL = 'https://cluster.klima.uni-bremen.de/data/downloads.sha256.hdf'
 CHECKSUM_VALIDATION_URL = CHECKSUM_URL + '.sha256'
 CHECKSUM_LIFETIME = 24 * 60 * 60
+
+# Recommended url for runs
+DEFAULT_BASE_URL = ('https://cluster.klima.uni-bremen.de/~oggm/gdirs/oggm_v1.6/'
+                    'L3-L5_files/2023.3/elev_bands/W5E5_spinup')
 
 # Web mercator proj constants
 WEB_N_PIX = 256
@@ -132,10 +121,7 @@ def mkdir(path, reset=False):
 
     if reset and os.path.exists(path):
         shutil.rmtree(path)
-    try:
-        os.makedirs(path)
-    except FileExistsError:
-        pass
+    os.makedirs(path, exist_ok=True)
     return path
 
 
@@ -195,7 +181,7 @@ def get_dl_verify_data(section):
     """
 
     verify_key = 'dl_verify_data_' + section
-    if cfg.DATA.get(verify_key) is not None:
+    if verify_key in cfg.DATA:
         return cfg.DATA[verify_key]
 
     verify_file_path = os.path.join(cfg.CACHE_DIR, 'downloads.sha256.hdf')
@@ -348,10 +334,7 @@ def _verified_download_helper(cache_obj_name, dl_func, reset=False):
     """
     path = _cached_download_helper(cache_obj_name, dl_func, reset)
 
-    try:
-        dl_verify = cfg.PARAMS['dl_verify']
-    except KeyError:
-        dl_verify = True
+    dl_verify = cfg.PARAMS.get('dl_verify', False)
 
     if dl_verify and path and cache_obj_name not in cfg.DL_VERIFIED:
         cache_section, cache_path = cache_obj_name.split('/', 1)
@@ -430,7 +413,7 @@ def _classic_urlretrieve(url, path, reporthook, auth=None, timeout=None):
         urllib.request.urlretrieve(url, path, reporthook)
     except urllib.error.HTTPError as e:
         raise HttpDownloadError(e.code, ourl)
-    except urllib.error.ContentTooShortError as e:
+    except urllib.error.ContentTooShortError:
         raise HttpContentTooShortError()
     finally:
         socket.setdefaulttimeout(old_def_timeout)
@@ -574,7 +557,7 @@ def _progress_urlretrieve(url, cache_name=None, reset=False,
         except BaseException:
             pass
         return res
-    except (ImportError, ModuleNotFoundError):
+    except ImportError:
         return oggm_urlretrieve(url, cache_obj_name=cache_name,
                                 reset=reset, auth=auth, timeout=timeout)
 
@@ -608,13 +591,14 @@ def _aws_file_download_unlocked(aws_path, cache_name=None, reset=False):
     return _verified_download_helper(cache_obj_name, _dlf, reset)
 
 
-def file_downloader(www_path, retry_max=5, cache_name=None,
-                    reset=False, auth=None, timeout=None):
+def file_downloader(www_path, retry_max=3, sleep_on_retry=5,
+                    cache_name=None, reset=False, auth=None,
+                    timeout=None):
     """A slightly better downloader: it tries more than once."""
 
     local_path = None
     retry_counter = 0
-    while retry_counter <= retry_max:
+    while retry_counter < retry_max:
         # Try to download
         try:
             retry_counter += 1
@@ -629,18 +613,19 @@ def file_downloader(www_path, retry_max=5, cache_name=None,
                 # Ok so this *should* be an ocean tile
                 return None
             elif err.code >= 500 and err.code < 600:
-                logger.info("Downloading %s failed with HTTP error %s, "
-                            "retrying in 10 seconds... %s/%s" %
-                            (www_path, err.code, retry_counter, retry_max))
-                time.sleep(10)
+                logger.info(f"Downloading {www_path} failed with "
+                            f"HTTP error {err.code}, "
+                            f"retrying in {sleep_on_retry} seconds... "
+                            f"{retry_counter}/{retry_max}")
+                time.sleep(sleep_on_retry)
                 continue
             else:
                 raise
         except HttpContentTooShortError as err:
             logger.info("Downloading %s failed with ContentTooShortError"
-                        " error %s, retrying in 10 seconds... %s/%s" %
-                        (www_path, err.code, retry_counter, retry_max))
-            time.sleep(10)
+                        " error %s, retrying in %s seconds... %s/%s" %
+                        (www_path, err.code, sleep_on_retry, retry_counter, retry_max))
+            time.sleep(sleep_on_retry)
             continue
         except DownloadVerificationFailedException as err:
             if (cfg.PATHS['dl_cache_dir'] and
@@ -670,15 +655,15 @@ def file_downloader(www_path, retry_max=5, cache_name=None,
             else:
                 # in other cases: try again
                 logger.info("Downloading %s failed with ConnectionError, "
-                            "retrying in 10 seconds... %s/%s" %
-                            (www_path, retry_counter, retry_max))
-                time.sleep(10)
+                            "retrying in %s seconds... %s/%s" %
+                            (www_path, sleep_on_retry, retry_counter, retry_max))
+                time.sleep(sleep_on_retry)
                 continue
         except FTPSDownloadError as err:
             logger.info("Downloading %s failed with FTPSDownloadError"
-                        " error: '%s', retrying in 10 seconds... %s/%s" %
-                        (www_path, err.orgerr, retry_counter, retry_max))
-            time.sleep(10)
+                        " error: '%s', retrying in %s seconds... %s/%s" %
+                        (www_path, err.orgerr, sleep_on_retry, retry_counter, retry_max))
+            time.sleep(sleep_on_retry)
             continue
 
     # See if we managed (fail is allowed)
@@ -956,7 +941,7 @@ def _download_tandem_file_unlocked(zone):
     tmpdir = cfg.PATHS['tmp_dir']
     mkdir(tmpdir)
     bname = zone.split('/')[-1] + '_DEM.tif'
-    wwwfile = ('https://download.geoservice.dlr.de/TDM90/files/'
+    wwwfile = ('https://download.geoservice.dlr.de/TDM90/files/DEM/'
                '{}.zip'.format(zone))
     outpath = os.path.join(tmpdir, bname)
 
@@ -1179,7 +1164,7 @@ def _download_copdem_file_unlocked(cppfile, tilename, source):
 
     # Did we download it yet?
     ftpfile = ('ftps://cdsdata.copernicus.eu:990/' +
-               'datasets/COP-DEM_GLO-{}-DGED/2021_1/'.format(source[-2:]) +
+               'datasets/COP-DEM_GLO-{}-DGED/2022_1/'.format(source[-2:]) +
                cppfile)
 
     dest_file = download_with_authentication(ftpfile,
@@ -1280,10 +1265,9 @@ def get_prepro_base_url(base_url=None, rgi_version=None, border=None,
     """Extended base url where to find the desired gdirs."""
 
     if base_url is None:
-        if prepro_level <= 2:
-            base_url = GDIR_L1L2_URL
-        else:
-            base_url = GDIR_L3L5_URL
+        raise InvalidParamsError('Starting with v1.6, users now have to '
+                                 'explicitly indicate the url they want '
+                                 'to start from.')
 
     if not base_url.endswith('/'):
         base_url += '/'
@@ -1306,7 +1290,11 @@ def _get_prepro_gdir_unlocked(rgi_version, rgi_id, border, prepro_level,
 
     url = get_prepro_base_url(rgi_version=rgi_version, border=border,
                               prepro_level=prepro_level, base_url=base_url)
-    url += '{}/{}.tar' .format(rgi_id[:8], rgi_id[:11])
+    if len(rgi_id) == 23:
+        # RGI7
+        url += '{}/{}.tar'.format(rgi_id[:17], rgi_id[:20])
+    else:
+        url += '{}/{}.tar'.format(rgi_id[:8], rgi_id[:11])
     tar_base = file_downloader(url)
     if tar_base is None:
         raise RuntimeError('Could not find file at ' + url)
@@ -1359,6 +1347,48 @@ def get_geodetic_mb_dataframe(file_path=None):
     return df
 
 
+def get_temp_bias_dataframe(dataset='w5e5'):
+    """Fetches the reference geodetic dataframe for calibration.
+
+    Currently, that's the data from Hughonnet et al. (2021), corrected for
+    outliers and with void filled. The data preparation script is
+    available at
+    https://nbviewer.jupyter.org/urls/cluster.klima.uni-bremen.de/~oggm/geodetic_ref_mb/convert.ipynb
+
+    Parameters
+    ----------
+    file_path : str
+        in case you have your own file to parse (check the format first!)
+
+    Returns
+    -------
+    a DataFrame with the data.
+    """
+
+    if dataset != 'w5e5':
+        raise NotImplementedError(f'No such dataset available yet: {dataset}')
+
+    # fetch the file online
+    base_url = ('https://cluster.klima.uni-bremen.de/~oggm/ref_mb_params/oggm_v1.6/'
+                'w5e5_temp_bias_v2023.4.csv')
+
+    file_path = file_downloader(base_url)
+
+    # Did we open it yet?
+    if file_path in cfg.DATA:
+        return cfg.DATA[file_path]
+
+    # If not let's go
+    extension = os.path.splitext(file_path)[1]
+    if extension == '.csv':
+        df = pd.read_csv(file_path, index_col=0)
+    elif extension == '.hdf':
+        df = pd.read_hdf(file_path)
+
+    cfg.DATA[file_path] = df
+    return df
+
+
 def srtm_zone(lon_ex, lat_ex):
     """Returns a list of SRTM zones covering the desired extent.
     """
@@ -1393,6 +1423,7 @@ def srtm_zone(lon_ex, lat_ex):
 def _tandem_path(lon_tile, lat_tile):
 
     # OK we have a proper tile now
+    # This changed in December 2022
 
     # First folder level is sorted from S to N
     level_0 = 'S' if lat_tile < 0 else 'N'
@@ -1546,7 +1577,7 @@ def copdem_zone(lon_ex, lat_ex, source):
     if source in cfg.DATA:
         df = cfg.DATA[source]
     else:
-        df = pd.read_csv(get_demo_file('{}_2021_1.csv'.format(source.lower())))
+        df = pd.read_csv(get_demo_file('{}_2022_1.csv'.format(source.lower())))
         cfg.DATA[source] = df
 
     # adding small buffer for unlikely case where one lon/lat_ex == xx.0
@@ -1562,14 +1593,14 @@ def copdem_zone(lon_ex, lat_ex, source):
             ew = 'W' if lon < 0 else 'E'
             lat_str = '{}{:02.0f}'.format(ns, abs(lat))
             lon_str = '{}{:03.0f}'.format(ew, abs(lon))
-            # COPDEM is global, if we miss tiles it is worth an error
             try:
                 filename = df.loc[(df['Long'] == lon_str) &
                                   (df['Lat'] == lat_str)]['CPP filename'].iloc[0]
                 flist.append((filename,
                               'Copernicus_DSM_{}_{}_00_{}_00'.format(asec, lat_str, lon_str)))
             except IndexError:
-                raise InvalidDEMError('Could not find a matching Copernicus DEM file.')
+                # COPDEM is global, if we miss tiles it is probably in the ocean
+                pass
     return flist
 
 
@@ -1835,7 +1866,8 @@ def get_rgi_dir(version=None, reset=False):
     Parameters
     ----------
     version : str
-        '5', '6', defaults to None (linking to the one specified in cfg.PARAMS)
+        '5', '6', '62', '70G', '70C'
+        defaults to None (linking to the one specified in cfg.PARAMS)
     reset : bool
         If True, deletes the RGI directory first and downloads the data
 
@@ -1866,6 +1898,9 @@ def _get_rgi_dir_unlocked(version=None, reset=False):
     rgi_dir = os.path.join(rgi_dir, 'RGIV' + version)
     mkdir(rgi_dir, reset=reset)
 
+    pattern = '*_rgi{}_*.zip'.format(version)
+    test_file = os.path.join(rgi_dir, f'*_rgi*{version}_manifest.txt')
+
     if version == '50':
         dfile = 'http://www.glims.org/RGI/rgi50_files/rgi50.zip'
     elif version == '60':
@@ -1874,18 +1909,29 @@ def _get_rgi_dir_unlocked(version=None, reset=False):
         dfile = 'https://cluster.klima.uni-bremen.de/data/rgi/rgi_61.zip'
     elif version == '62':
         dfile = 'https://cluster.klima.uni-bremen.de/~oggm/rgi/rgi62.zip'
-
-    test_file = os.path.join(rgi_dir,
-                             '*_rgi*{}_manifest.txt'.format(version))
+    elif version == '70G':
+        pattern = 'RGI2000-*.zip'
+        test_file = os.path.join(rgi_dir, 'RGI2000-v7.0-G-01_alaska', 'README.md')
+        dfile = 'https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0770_rgi_v7/'
+        dfile += 'global_files/RGI2000-v7.0-G-global.zip'
+    elif version == '70C':
+        pattern = 'RGI2000-*.zip'
+        test_file = os.path.join(rgi_dir, 'RGI2000-v7.0-C-01_alaska', 'README.md')
+        dfile = 'https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0770_rgi_v7/'
+        dfile += 'global_files/RGI2000-v7.0-C-global.zip'
 
     if len(glob.glob(test_file)) == 0:
         # if not there download it
         ofile = file_downloader(dfile, reset=reset)
+        if ofile is None:
+            raise RuntimeError(f'Could not download RGI file: {dfile}')
         # Extract root
-        with zipfile.ZipFile(ofile) as zf:
-            zf.extractall(rgi_dir)
+        try:
+            with zipfile.ZipFile(ofile) as zf:
+                zf.extractall(rgi_dir)
+        except zipfile.BadZipFile:
+            raise zipfile.BadZipFile(f'RGI file BadZipFile error: {ofile}')
         # Extract subdirs
-        pattern = '*_rgi{}_*.zip'.format(version)
         for root, dirs, files in os.walk(cfg.PATHS['rgi_dir']):
             for filename in fnmatch.filter(files, pattern):
                 zfile = os.path.join(root, filename)
@@ -1896,7 +1942,7 @@ def _get_rgi_dir_unlocked(version=None, reset=False):
                 # delete the zipfile after success
                 os.remove(zfile)
         if len(glob.glob(test_file)) == 0:
-            raise RuntimeError('Could not find a manifest file in the RGI '
+            raise RuntimeError('Could not find a readme file in the RGI '
                                'directory: ' + rgi_dir)
     return rgi_dir
 
@@ -1911,7 +1957,7 @@ def get_rgi_region_file(region, version=None, reset=False):
     region : str
         from '01' to '19'
     version : str
-        '5', '6', defaults to None (linking to the one specified in cfg.PARAMS)
+        '62', '70G', '70C', defaults to None (linking to the one specified in cfg.PARAMS)
     reset : bool
         If True, deletes the RGI directory first and downloads the data
 
@@ -1922,7 +1968,10 @@ def get_rgi_region_file(region, version=None, reset=False):
     """
 
     rgi_dir = get_rgi_dir(version=version, reset=reset)
-    f = list(glob.glob(rgi_dir + "/*/{}_*.shp".format(region)))
+    if version in ['70G', '70C']:
+        f = list(glob.glob(rgi_dir + f"/*/*-{region}_*.shp"))
+    else:
+        f = list(glob.glob(rgi_dir + "/*/*{}_*.shp".format(region)))
     assert len(f) == 1
     return f[0]
 
@@ -1937,7 +1986,7 @@ def get_rgi_glacier_entities(rgi_ids, version=None):
     rgi_ids : list of str
         the glaciers you want the outlines for
     version : str
-        the rgi version
+        the rgi version ('62', '70G', '70C')
 
     Returns
     -------
@@ -1945,13 +1994,27 @@ def get_rgi_glacier_entities(rgi_ids, version=None):
         containing the desired RGI glacier outlines
     """
 
-    regions = [s.split('-')[1].split('.')[0] for s in rgi_ids]
     if version is None:
-        version = rgi_ids[0].split('-')[0][-2:]
+        if len(rgi_ids[0]) == 14:
+            # RGI6
+            version = rgi_ids[0].split('-')[0][-2:]
+        else:
+            # RGI7 RGI2000-v7.0-G-02-00003
+            assert rgi_ids[0].split('-')[1] == 'v7.0'
+            version = '70' + rgi_ids[0].split('-')[2]
+
+    if version in ['70G', '70C']:
+        regions = [s.split('-')[-2] for s in rgi_ids]
+    else:
+        regions = [s.split('-')[1].split('.')[0] for s in rgi_ids]
+
     selection = []
     for reg in sorted(np.unique(regions)):
         sh = gpd.read_file(get_rgi_region_file(reg, version=version))
-        selection.append(sh.loc[sh.RGIId.isin(rgi_ids)])
+        try:
+            selection.append(sh.loc[sh.RGIId.isin(rgi_ids)])
+        except AttributeError:
+            selection.append(sh.loc[sh.rgi_id.isin(rgi_ids)])
 
     # Make a new dataframe of those
     selection = pd.concat(selection)
@@ -1970,7 +2033,7 @@ def get_rgi_intersects_dir(version=None, reset=False):
     Parameters
     ----------
     version : str
-        '5', '6', defaults to None (linking to the one specified in cfg.PARAMS)
+        '5', '6', '70G', defaults to None (linking to the one specified in cfg.PARAMS)
     reset : bool
         If True, deletes the intersects before redownloading them
 
@@ -2006,6 +2069,9 @@ def _get_rgi_intersects_dir_unlocked(version=None, reset=False):
     if version == '62':
         dfile = ('https://cluster.klima.uni-bremen.de/~oggm/rgi/'
                  'rgi62_Intersects.zip')
+    if version == '70G':
+        dfile = 'https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0770_rgi_v7/'
+        dfile += 'global_files/RGI2000-v7.0-I-global.zip'
 
     odir = os.path.join(rgi_dir, 'RGI_V' + version + '_Intersects')
     if reset and os.path.exists(odir):
@@ -2023,9 +2089,8 @@ def _get_rgi_intersects_dir_unlocked(version=None, reset=False):
             if not os.path.exists(test_file):
                 raise RuntimeError('Could not find a manifest file in the RGI '
                                    'directory: ' + odir)
-    else:
-        test_file = os.path.join(odir,
-                                 '*ntersect*anifest.txt'.format(version))
+    elif version == '62':
+        test_file = os.path.join(odir, '*ntersect*anifest.txt')
         if len(glob.glob(test_file)) == 0:
             # if not there download it
             ofile = file_downloader(dfile, reset=reset)
@@ -2046,6 +2111,28 @@ def _get_rgi_intersects_dir_unlocked(version=None, reset=False):
             if len(glob.glob(test_file)) == 0:
                 raise RuntimeError('Could not find a manifest file in the RGI '
                                    'directory: ' + odir)
+    elif version == '70G':
+        test_file = os.path.join(odir, 'README.md')
+        if len(glob.glob(test_file)) == 0:
+            # if not there download it
+            ofile = file_downloader(dfile, reset=reset)
+            # Extract root
+            with zipfile.ZipFile(ofile) as zf:
+                zf.extractall(odir)
+            # Extract subdirs
+            pattern = 'RGI2000-*.zip'
+            for root, dirs, files in os.walk(cfg.PATHS['rgi_dir']):
+                for filename in fnmatch.filter(files, pattern):
+                    zfile = os.path.join(root, filename)
+                    with zipfile.ZipFile(zfile) as zf:
+                        ex_root = zfile.replace('.zip', '')
+                        mkdir(ex_root)
+                        zf.extractall(ex_root)
+                    # delete the zipfile after success
+                    os.remove(zfile)
+            if len(glob.glob(test_file)) == 0:
+                raise RuntimeError('Could not find a README file in the RGI intersects'
+                                   'directory: ' + odir)
 
     return odir
 
@@ -2062,7 +2149,7 @@ def get_rgi_intersects_region_file(region=None, version=None, reset=False):
         From RGI version '61' onwards, please use `get_rgi_intersects_entities`
         with a list of glaciers instead of relying to the global file.
     version : str
-        '5', '6', '61'... defaults the one specified in cfg.PARAMS
+        '5', '6', '61', '70G'. Defaults the one specified in cfg.PARAMS
     reset : bool
         If True, deletes the intersect file before redownloading it
 
@@ -2086,8 +2173,12 @@ def get_rgi_intersects_region_file(region=None, version=None, reset=False):
         else:
             raise InvalidParamsError("From RGI version 61 onwards, please use "
                                      "get_rgi_intersects_entities() instead.")
-    f = list(glob.glob(os.path.join(rgi_dir, "*", '*intersects*' + region +
-                                    '_rgi*' + version + '*.shp')))
+
+    if version == '70G':
+        f = list(glob.glob(os.path.join(rgi_dir, "*", f'*-{region}_*.shp')))
+    else:
+        f = list(glob.glob(os.path.join(rgi_dir, "*", '*intersects*' + region +
+                                        '_rgi*' + version + '*.shp')))
     assert len(f) == 1
     return f[0]
 
@@ -2100,7 +2191,7 @@ def get_rgi_intersects_entities(rgi_ids, version=None):
     rgi_ids: list of str
         list of rgi_ids you want to look for intersections for
     version: str
-        '5', '6', '61'... defaults the one specified in cfg.PARAMS
+        '5', '6', '61', '70G'. Defaults the one specified in cfg.PARAMS
 
     Returns
     -------
@@ -2110,16 +2201,28 @@ def get_rgi_intersects_entities(rgi_ids, version=None):
 
     if version is None:
         version = cfg.PARAMS['rgi_version']
+
     if len(version) == 1:
         version += '0'
 
-    regions = [s.split('-')[1].split('.')[0] for s in rgi_ids]
+    # RGI V6 or 7
+    if version == '70G':
+        regions = [s.split('-')[-2] for s in rgi_ids]
+    else:
+        try:
+            regions = [s.split('-')[3] for s in rgi_ids]
+        except IndexError:
+            regions = [s.split('-')[1].split('.')[0] for s in rgi_ids]
+
     selection = []
     for reg in sorted(np.unique(regions)):
-        sh = gpd.read_file(get_rgi_intersects_region_file(reg,
-                                                          version=version))
-        selection.append(sh.loc[sh.RGIId_1.isin(rgi_ids) |
-                                sh.RGIId_2.isin(rgi_ids)])
+        sh = gpd.read_file(get_rgi_intersects_region_file(reg, version=version))
+        if version == '70G':
+            selection.append(sh.loc[sh.rgi_g_id_1.isin(rgi_ids) |
+                                    sh.rgi_g_id_2.isin(rgi_ids)])
+        else:
+            selection.append(sh.loc[sh.RGIId_1.isin(rgi_ids) |
+                                    sh.RGIId_2.isin(rgi_ids)])
 
     # Make a new dataframe of those
     selection = pd.concat(selection)
@@ -2204,20 +2307,18 @@ def default_dem_source(rgi_id):
     rgi_id = rgi_id[:14]
     if cfg.DEM_SOURCE_TABLE.get(rgi_reg) is None:
         fp = get_demo_file('rgi62_dem_frac.h5')
-        cfg.DEM_SOURCE_TABLE[rgi_reg] = pd.read_hdf(fp, key=rgi_reg)
+        cfg.DEM_SOURCE_TABLE[rgi_reg] = pd.read_hdf(fp)
 
     sel = cfg.DEM_SOURCE_TABLE[rgi_reg].loc[rgi_id]
-    for s in ['NASADEM', 'COPDEM', 'GIMP', 'REMA', 'TANDEM', 'MAPZEN']:
+    for s in ['NASADEM', 'COPDEM90', 'COPDEM30', 'GIMP', 'REMA',
+              'RAMP', 'TANDEM', 'MAPZEN']:
         if sel.loc[s] > 0.75:
-            # this can go as soon as 'rgi62_dem_frac.h5' is updated:
-            if s == 'COPDEM':
-                s = 'COPDEM90'
             return s
+    # If nothing works, try COPDEM again
+    return 'COPDEM90'
 
-    return None
 
-
-def get_topo_file(lon_ex=None, lat_ex=None, rgi_id=None, *,
+def get_topo_file(lon_ex=None, lat_ex=None, gdir=None, *,
                   dx_meter=None, zoom=None, source=None):
     """Path(s) to the DEM file(s) covering the desired extent.
 
@@ -2237,7 +2338,7 @@ def get_topo_file(lon_ex=None, lat_ex=None, rgi_id=None, *,
         a (min_lon, max_lon) tuple delimiting the requested area longitudes
     lat_ex : tuple or int, required
         a (min_lat, max_lat) tuple delimiting the requested area latitudes
-    rgi_id : str, required if source=None
+    gdir : GlacierDirectory, required if source=None
         the glacier id, used to decide on the DEM source
     rgi_region : str, optional
         the RGI region number (required for the GIMP DEM)
@@ -2262,7 +2363,7 @@ def get_topo_file(lon_ex=None, lat_ex=None, rgi_id=None, *,
         # check all user options
         for s in source:
             demf, source_str = get_topo_file(lon_ex=lon_ex, lat_ex=lat_ex,
-                                             rgi_id=rgi_id, source=s)
+                                             gdir=gdir, source=s)
             if demf[0]:
                 return demf, source_str
 
@@ -2274,9 +2375,11 @@ def get_topo_file(lon_ex=None, lat_ex=None, rgi_id=None, *,
 
     # Some logic to decide which source to take if unspecified
     if source is None:
-        if rgi_id is None:
-            raise InvalidParamsError('rgi_id is needed if source=None')
-        source = default_dem_source(rgi_id)
+        if gdir is None:
+            raise InvalidParamsError('gdir is needed if source=None')
+        source = getattr(gdir, 'rgi_dem_source')
+        if source is None:
+            source = default_dem_source(gdir.rgi_id)
 
     if source not in DEM_SOURCES:
         raise InvalidParamsError('`source` must be one of '

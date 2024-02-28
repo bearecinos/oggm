@@ -13,6 +13,7 @@ from packaging.version import Version
 # External libs
 import pandas as pd
 import numpy as np
+import xarray as xr
 from scipy.ndimage import convolve1d
 try:
     from scipy.signal.windows import gaussian
@@ -22,6 +23,8 @@ except AttributeError:
 from scipy.interpolate import interp1d
 import shapely.geometry as shpg
 from shapely.ops import linemerge
+from shapely.validation import make_valid
+from salem.gis import Grid
 
 # Optional libs
 try:
@@ -32,7 +35,7 @@ except ImportError:
 # Locals
 import oggm.cfg as cfg
 from oggm.cfg import SEC_IN_YEAR, SEC_IN_MONTH
-from oggm.utils._downloads import get_demo_file
+from oggm.utils._downloads import get_demo_file, file_downloader
 from oggm.exceptions import InvalidParamsError, InvalidGeometryError
 
 # Module logger
@@ -68,12 +71,22 @@ def parse_rgi_meta(version=None):
         return _RGI_METADATA[version]
 
     # Parse RGI metadata
-    reg_names = pd.read_csv(get_demo_file('rgi_regions.csv'), index_col=0)
-    if version in ['4', '5']:
+    if version in ['7', '70G', '70C']:
+        rgi7url = 'https://cluster.klima.uni-bremen.de/~fmaussion/misc/rgi7_data/00_rgi70_regions/'
+        reg_names = gpd.read_file(file_downloader(rgi7url + '00_rgi70_O1Regions/00_rgi70_O1Regions.dbf'))
+        reg_names.index = reg_names['o1region'].astype(int)
+        reg_names = reg_names['full_name']
+        subreg_names = gpd.read_file(file_downloader(rgi7url + '00_rgi70_O2Regions/00_rgi70_O2Regions.dbf'))
+        subreg_names.index = subreg_names['o2region']
+        subreg_names = subreg_names['full_name']
+
+    elif version in ['4', '5']:
+        reg_names = pd.read_csv(get_demo_file('rgi_regions.csv'), index_col=0)
         # The files where different back then
         subreg_names = pd.read_csv(get_demo_file('rgi_subregions_V5.csv'),
                                    index_col=0)
     else:
+        reg_names = pd.read_csv(get_demo_file('rgi_regions.csv'), index_col=0)
         f = os.path.join(get_demo_file('rgi_subregions_'
                                        'V{}.csv'.format(version)))
         subreg_names = pd.read_csv(f)
@@ -213,22 +226,6 @@ def interp_nans(array, default=None):
     return _tmp
 
 
-def apply_test_ref_tstars(baseline='cru4'):
-    """Copy the testing ref tstars to the current working directory.
-
-    Used mostly for testing.
-    """
-    if not os.path.exists(cfg.PATHS['working_dir']):
-        raise RuntimeError('Need a valid working_dir')
-    shutil.copyfile(get_demo_file(f'oggm_ref_tstars_rgi5_{baseline}.csv'),
-                    os.path.join(cfg.PATHS['working_dir'],
-                                 'ref_tstars.csv'))
-    shutil.copyfile(get_demo_file(f'oggm_ref_tstars_rgi5_{baseline}_calib_'
-                                  f'params.json'),
-                    os.path.join(cfg.PATHS['working_dir'],
-                                 'ref_tstars_params.json'))
-
-
 def smooth1d(array, window_size=None, kernel='gaussian'):
     """Apply a centered window smoothing to a 1D array.
 
@@ -297,25 +294,25 @@ def line_interpol(line, dx):
     while True:
         pref = points[-1]
         pbs = pref.buffer(dx).boundary.intersection(line)
-        if pbs.type == 'Point':
+        if pbs.geom_type == 'Point':
             pbs = [pbs]
-        elif pbs.type == 'LineString':
+        elif pbs.geom_type == 'LineString':
             # This is rare
             pbs = [shpg.Point(c) for c in pbs.coords]
             assert len(pbs) == 2
-        elif pbs.type == 'GeometryCollection':
+        elif pbs.geom_type == 'GeometryCollection':
             # This is rare
             opbs = []
             for p in pbs.geoms:
-                if p.type == 'Point':
+                if p.geom_type == 'Point':
                     opbs.append(p)
-                elif p.type == 'LineString':
+                elif p.geom_type == 'LineString':
                     opbs.extend([shpg.Point(c) for c in p.coords])
             pbs = opbs
         else:
-            if pbs.type != 'MultiPoint':
+            if pbs.geom_type != 'MultiPoint':
                 raise RuntimeError('line_interpol: we expect a MultiPoint '
-                                   'but got a {}.'.format(pbs.type))
+                                   'but got a {}.'.format(pbs.geom_type))
 
         try:
             # Shapely v2 compat
@@ -517,7 +514,7 @@ def polygon_intersections(gdf):
                 if not isinstance(line, shpg.linestring.LineString):
                     raise RuntimeError('polygon_intersections: we expect'
                                        'a LineString but got a '
-                                       '{}.'.format(line.type))
+                                       '{}.'.format(line.geom_type))
                 line = gpd.GeoDataFrame([[i, j, line]],
                                         columns=out_cols)
                 out = pd.concat([out, line])
@@ -525,8 +522,102 @@ def polygon_intersections(gdf):
     return out
 
 
+def recursive_valid_polygons(geoms, crs):
+    """Given a list of shapely geometries, makes sure all geometries are valid
+
+    All will be valid polygons of area > 10000m2"""
+    new_geoms = []
+    for geom in geoms:
+        new_geom = make_valid(geom)
+        try:
+            new_geoms.extend(recursive_valid_polygons(list(new_geom.geoms), crs))
+        except AttributeError:
+            new_s = gpd.GeoSeries(new_geom)
+            new_s.crs = crs
+            if new_s.to_crs({'proj': 'cea'}).area.iloc[0] >= 10000:
+                new_geoms.append(new_geom)
+    assert np.all([type(geom) == shpg.Polygon for geom in new_geoms])
+    return new_geoms
+
+
+def combine_grids(gdirs):
+    """ Combines individual grids of different glacier directories. The
+    resulting grid extent includes all individual grids completely. The first
+    glacier directory in the list defines the projection of the resulting grid.
+
+    Parameters
+    ----------
+    gdirs : [], required
+        A list of GlacierDirectories. The first gdir in the list defines the
+        projection of the resulting grid.
+
+    Returns
+    -------
+    salem.gis.Grid
+    """
+
+    new_grid = {
+        'proj': None,
+        'nxny': None,
+        'dxdy': None,
+        'x0y0': None,
+        'pixel_ref': None
+    }
+
+    left_use = None
+    right_use = None
+    bottom_use = None
+    top_use = None
+    dx_use = None
+    dy_use = None
+
+    for gdir in gdirs:
+        # use the first gdir to define some values
+        if new_grid['proj'] is None:
+            new_grid['proj'] = gdir.grid.proj
+        if new_grid['pixel_ref'] is None:
+            new_grid['pixel_ref'] = gdir.grid.pixel_ref
+
+        # find largest extend including all grids completely
+        (left, right, bottom, top) = gdir.grid.extent_in_crs(new_grid['proj'])
+        if (left_use is None) or (left_use > left):
+            left_use = left
+        if right_use is None or right_use < right:
+            right_use = right
+        if bottom_use is None or bottom_use > bottom:
+            bottom_use = bottom
+        if top_use is None or top_use < top:
+            top_use = top
+
+        # find smallest dx and dy for the estimation of nx and ny
+        dx = gdir.grid.dx
+        dy = gdir.grid.dy
+        if dx_use is None or dx_use > dx:
+            dx_use = dx
+        # dy could be negative
+        if dy_use is None or abs(dy_use) > abs(dy):
+            dy_use = dy
+
+    # calculate nx and ny, the final extend could be one grid point larger or
+    # smaller due to round()
+    nx_use = round((right_use - left_use) / dx_use)
+    ny_use = round((top_use - bottom_use) / abs(dy_use))
+
+    # finally define the last values of the new grid
+    if np.sign(dy_use) < 0:
+        new_grid['x0y0'] = (left_use, top_use)
+    else:
+        new_grid['x0y0'] = (left_use, bottom_use)
+    new_grid['nxny'] = (nx_use, ny_use)
+    new_grid['dxdy'] = (dx_use, dy_use)
+
+    return Grid.from_dict(new_grid)
+
+
 def multipolygon_to_polygon(geometry, gdir=None):
     """Sometimes an RGI geometry is a multipolygon: this should not happen.
+
+    It was vor vey old versions, pretty sure this is not needed anymore.
 
     Parameters
     ----------
@@ -543,10 +634,16 @@ def multipolygon_to_polygon(geometry, gdir=None):
     # Log
     rid = gdir.rgi_id + ': ' if gdir is not None else ''
 
-    if 'Multi' in geometry.type:
-        parts = np.array(geometry)
+    if 'Multi' in geometry.geom_type:
+        # needed for shapely version > 0.2.0
+        # previous code was: parts = np.array(geometry)
+        parts = []
+        for p in geometry.geoms:
+            parts.append(p)
+        parts = np.array(parts)
+
         for p in parts:
-            assert p.type == 'Polygon'
+            assert p.geom_type == 'Polygon'
         areas = np.array([p.area for p in parts])
         parts = parts[np.argsort(areas)][::-1]
         areas = areas[np.argsort(areas)][::-1]
@@ -570,7 +667,7 @@ def multipolygon_to_polygon(geometry, gdir=None):
             if np.any(areas[1:] > (areas[0] / 4)):
                 log.info('Geometry {} lost quite a chunk.'.format(rid))
 
-    if geometry.type != 'Polygon':
+    if geometry.geom_type != 'Polygon':
         raise InvalidGeometryError('Geometry {} is not a Polygon.'.format(rid))
     return geometry
 
@@ -583,27 +680,27 @@ def floatyear_to_date(yr):
 
     Parameters
     ----------
-    yr : float
+    yr : float or list of float
         The floating year
     """
 
-    try:
-        sec, out_y = math.modf(yr)
-        out_y = int(out_y)
-        sec = round(sec * SEC_IN_YEAR)
-        if sec == SEC_IN_YEAR:
-            # Floating errors
-            out_y += 1
-            sec = 0
-        out_m = int(sec / SEC_IN_MONTH) + 1
-    except TypeError:
-        # TODO: inefficient but no time right now
-        out_y = np.zeros(len(yr), np.int64)
-        out_m = np.zeros(len(yr), np.int64)
-        for i, y in enumerate(yr):
-            y, m = floatyear_to_date(y)
-            out_y[i] = y
-            out_m[i] = m
+    out_y, remainder = np.divmod(yr, 1)
+    out_y = out_y.astype(int)
+
+    month_exact = (remainder * 12 + 1)
+    # np.where to deal with floating point precision
+    out_m = np.minimum(12,
+                       np.where(np.isclose(month_exact, np.round(month_exact)),
+                                np.round(month_exact),
+                                np.floor(month_exact)).astype(int))
+
+    if (isinstance(yr, list) or isinstance(yr, np.ndarray)) and len(yr) == 1:
+        out_y = out_y.item()
+        out_m = out_m.item()
+    elif isinstance(yr, xr.DataArray):
+        out_y = np.array(out_y)
+        out_m = np.array(out_m)
+
     return out_y, out_m
 
 
@@ -643,25 +740,16 @@ def hydrodate_to_calendardate(y, m, start_month=None):
                                  'callers of this function to specify the '
                                  'hydrological convention they are using.')
 
+    # nothing to do if start_month is 1
+    if start_month == 1:
+        return y, m
+
+    y = np.array(y)
+    m = np.array(m)
+
     e = 13 - start_month
-    try:
-        if m <= e:
-            if start_month == 1:
-                out_y = y
-            else:
-                out_y = y - 1
-            out_m = m + start_month - 1
-        else:
-            out_y = y
-            out_m = m - e
-    except (TypeError, ValueError):
-        # TODO: inefficient but no time right now
-        out_y = np.zeros(len(y), np.int64)
-        out_m = np.zeros(len(y), np.int64)
-        for i, (_y, _m) in enumerate(zip(y, m)):
-            _y, _m = hydrodate_to_calendardate(_y, _m, start_month=start_month)
-            out_y[i] = _y
-            out_m[i] = _m
+    out_m = m + np.where(m <= e, start_month - 1, -e)
+    out_y = y - np.where(m <= e, 1, 0)
     return out_y, out_m
 
 
@@ -683,24 +771,15 @@ def calendardate_to_hydrodate(y, m, start_month=None):
                                  'callers of this function to specify the '
                                  'hydrological convention they are using.')
 
-    try:
-        if m >= start_month:
-            if start_month == 1:
-                out_y = y
-            else:
-                out_y = y + 1
-            out_m = m - start_month + 1
-        else:
-            out_y = y
-            out_m = m + 13 - start_month
-    except (TypeError, ValueError):
-        # TODO: inefficient but no time right now
-        out_y = np.zeros(len(y), np.int64)
-        out_m = np.zeros(len(y), np.int64)
-        for i, (_y, _m) in enumerate(zip(y, m)):
-            _y, _m = calendardate_to_hydrodate(_y, _m, start_month=start_month)
-            out_y[i] = _y
-            out_m[i] = _m
+    # nothing to do if start_month is 1
+    if start_month == 1:
+        return y, m
+
+    y = np.array(y)
+    m = np.array(m)
+
+    out_m = m - start_month + np.where(m >= start_month, 1, 13)
+    out_y = y + np.where(m >= start_month, 1, 0)
     return out_y, out_m
 
 
@@ -731,7 +810,10 @@ def filter_rgi_name(name):
     This seems to be unnecessary with RGI V6
     """
 
-    if name is None or len(name) == 0:
+    try:
+        if name is None or len(name) == 0:
+            return ''
+    except TypeError:
         return ''
 
     if name[-1] in ['À', 'È', 'è', '\x9c', '3', 'Ð', '°', '¾',

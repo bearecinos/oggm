@@ -40,7 +40,7 @@ def _get_lookup_thickness():
 def _get_lookup_velocity():
     global _lookup_velocity
     if _lookup_velocity is None:
-        fname = default_base_url + 'millan22_velocity_lookup_shp_20220902.zip'
+        fname = default_base_url + 'millan22_velocity_lookup_shp_20231127.zip'
         _lookup_velocity = gpd.read_file('zip://' + utils.file_downloader(fname))
     return _lookup_velocity
 
@@ -78,8 +78,14 @@ def _filter_and_reproj(gdir, var, gdf, allow_neg=True):
 
         # Subset to avoid mega files
         dsb = salem.GeoTiff(input_file)
-        x0, x1, y0, y1 = gdir.grid.extent
-        dsb.set_subset(corners=((x0, y0), (x1, y1)), crs=gdir.grid.proj, margin=5)
+        x0, x1, y0, y1 = gdir.grid.extent_in_crs(dsb.grid.proj)
+        with warnings.catch_warnings():
+            # This can trigger an out of bounds warning
+            warnings.filterwarnings("ignore", category=RuntimeWarning,
+                                    message='.*out of bounds.*')
+            dsb.set_subset(corners=((x0, y0), (x1, y1)),
+                           crs=dsb.grid.proj,
+                           margin=5)
 
         data = _filter(dsb)
         if not allow_neg:
@@ -91,7 +97,11 @@ def _filter_and_reproj(gdir, var, gdf, allow_neg=True):
             continue
 
         # Reproject now
-        r_data = gdir.grid.map_gridded_data(data, dsb.grid, interp='linear')
+        with warnings.catch_warnings():
+            # This can trigger an out of bounds warning
+            warnings.filterwarnings("ignore", category=RuntimeWarning,
+                                    message='.*out of bounds.*')
+            r_data = gdir.grid.map_gridded_data(data, dsb.grid, interp='linear')
         total_data += r_data.filled(0)
         grids_used.append(dsb)
         files_used.append(s.file_id)
@@ -161,7 +171,7 @@ def thickness_to_gdir(gdir, add_error=False):
 
 @utils.entity_task(log, writes=['gridded_data'])
 def velocity_to_gdir(gdir, add_error=False):
-    """Add the Millan 22 thickness data to this glacier directory.
+    """Add the Millan 22 velocity data to this glacier directory.
 
     Parameters
     ----------
@@ -185,7 +195,11 @@ def velocity_to_gdir(gdir, add_error=False):
                                    f'glacier: {gdir.rgi_id}')
 
     vel, files, grids = _filter_and_reproj(gdir, 'v', sel, allow_neg=False)
-    assert len(grids) == 1, 'Multiple velocity grids - dont know what to do.'
+    if len(grids) == 0:
+        raise RuntimeError('There is no velocity data for this glacier')
+    if len(grids) > 1:
+        raise RuntimeError('Multiple velocity grids - dont know what to do.')
+
     sel = sel.loc[sel.file_id == files[0]]
     vx, _, gridsx = _filter_and_reproj(gdir, 'vx', sel)
     vy, _, gridsy = _filter_and_reproj(gdir, 'vy', sel)
@@ -314,27 +328,35 @@ def millan_statistics(gdir):
     try:
         with xr.open_dataset(gdir.get_filepath('gridded_data')) as ds:
             thick = ds['millan_ice_thickness'].where(ds['glacier_mask'], np.NaN).load()
-            d['millan_vol_km3'] = float(thick.sum() * gdir.grid.dx ** 2 * 1e-9)
-            d['millan_area_km2'] = float((~thick.isnull()).sum() * gdir.grid.dx ** 2 * 1e-6)
-            d['millan_perc_cov'] = float(d['millan_area_km2'] / gdir.rgi_area_km2)
+            with warnings.catch_warnings():
+                # For operational runs we ignore the warnings
+                warnings.filterwarnings('ignore', category=RuntimeWarning)
+                d['millan_vol_km3'] = float(thick.sum() * gdir.grid.dx ** 2 * 1e-9)
+                d['millan_area_km2'] = float((~thick.isnull()).sum() * gdir.grid.dx ** 2 * 1e-6)
+                d['millan_perc_cov'] = float(d['millan_area_km2'] / gdir.rgi_area_km2)
 
-            if 'millan_ice_thickness_err' in ds:
-                err = ds['millan_ice_thickness_err'].where(ds['glacier_mask'], np.NaN).load()
-                d['millan_vol_err_km3'] = float(err.sum() * gdir.grid.dx ** 2 * 1e-9)
+                if 'millan_ice_thickness_err' in ds:
+                    err = ds['millan_ice_thickness_err'].where(ds['glacier_mask'], np.NaN).load()
+                    d['millan_vol_err_km3'] = float(err.sum() * gdir.grid.dx ** 2 * 1e-9)
     except (FileNotFoundError, AttributeError, KeyError):
         pass
 
     try:
         with xr.open_dataset(gdir.get_filepath('gridded_data')) as ds:
             v = ds['millan_v'].where(ds['glacier_mask'], np.NaN).load()
-            d['millan_avg_vel'] = np.nanmean(v)
-            d['millan_max_vel'] = np.nanmax(v)
+            with warnings.catch_warnings():
+                # For operational runs we ignore the warnings
+                warnings.filterwarnings('ignore', category=RuntimeWarning)
+                d['millan_avg_vel'] = np.nanmean(v)
+                d['millan_max_vel'] = np.nanmax(v)
+                d['millan_vel_perc_cov'] = (float((~v.isnull()).sum() * gdir.grid.dx ** 2 * 1e-6) /
+                                            gdir.rgi_area_km2)
 
-            if 'millan_err_vx' in ds:
-                err_vx = ds['millan_err_vx'].where(ds['glacier_mask'], np.NaN).load()
-                err_vy = ds['millan_err_vy'].where(ds['glacier_mask'], np.NaN).load()
-                err = (err_vx**2 + err_vy**2)**0.5
-                d['millan_avg_err_vel'] = np.nanmean(err)
+                if 'millan_err_vx' in ds:
+                    err_vx = ds['millan_err_vx'].where(ds['glacier_mask'], np.NaN).load()
+                    err_vy = ds['millan_err_vy'].where(ds['glacier_mask'], np.NaN).load()
+                    err = (err_vx**2 + err_vy**2)**0.5
+                    d['millan_avg_err_vel'] = np.nanmean(err)
 
     except (FileNotFoundError, AttributeError, KeyError):
         pass

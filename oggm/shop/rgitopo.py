@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 DEMS_URL = 'https://cluster.klima.uni-bremen.de/data/gdirs/dems_v2/default'
 DEMS_HR_URL = 'https://cluster.klima.uni-bremen.de/data/gdirs/dems_v1/highres/'
 
+
 def init_glacier_directories_from_rgitopo(rgidf=None, dem_source=None,
                                           resolution='default',
                                           keep_dem_folders=False,
@@ -56,13 +57,6 @@ def init_glacier_directories_from_rgitopo(rgidf=None, dem_source=None,
     -------
     gdirs : list of :py:class:`oggm.GlacierDirectory` objects
         the initialised glacier directories
-
-    Notes
-    -----
-    This task is very similar to init_glacier_regions, with one main
-    difference: it does not process the DEMs for this glacier.
-    Eventually, init_glacier_regions will be deprecated and removed from the
-    codebase.
     """
 
     if resolution == 'default':
@@ -96,29 +90,25 @@ def select_dem_from_dir(gdir, dem_source=None, keep_dem_folders=False):
     gdir : :py:class:`oggm.GlacierDirectory`
         the glacier directory
     dem_source : str
-        the source to pick from (default: NASADEM and COPDEM90)
+        the source to pick from. If 'RGI', we assume that there is a
+        `dem_source` attribute in the RGI file. If 'BY_RES', we use
+        COPDEM30 for all gdirs with resolution smaller than 60m
     keep_dem_folders : bool
         the default is to delete the other DEM directories to save space.
         Set this to True to prevent that (e.g. for sensitivity tests)
     """
 
-    # Start by deleting noise
-    for fn in ['log.txt', 'diagnostics.json']:
-        fp = os.path.join(gdir.dir, fn)
-        if os.path.exists(fp):
-            os.remove(fp)
+    if dem_source == 'RGI':
+        dem_source = gdir.rgi_dem_source
+    if dem_source == 'BY_RES':
+        dem_source = 'COPDEM30' if gdir.grid.dx < 60 else 'COPDEM90'
 
     sources = [f.name for f in os.scandir(gdir.dir) if f.is_dir()
                and not f.name.startswith('.')]
-
-    if dem_source is None:
-        for s in ['NASADEM', 'COPDEM90', 'GIMP', 'REMA', 'TANDEM', 'MAPZEN']:
-            if s in sources:
-                dem_source = s
-
     if dem_source not in sources:
         raise RuntimeError('source {} not in folder'.format(dem_source))
 
+    gdir.add_to_diagnostics('dem_source', dem_source)
     shutil.copyfile(os.path.join(gdir.dir, dem_source, 'dem.tif'),
                     gdir.get_filepath('dem'))
     shutil.copyfile(os.path.join(gdir.dir, dem_source, 'dem_source.txt'),
@@ -129,7 +119,11 @@ def select_dem_from_dir(gdir, dem_source=None, keep_dem_folders=False):
             shutil.rmtree(os.path.join(gdir.dir, source))
 
 
-@utils.entity_task(log, writes=[])
+def _fallback_dem_quality_check(gdir):
+    return dict(rgi_id=gdir.rgi_id)
+
+
+@utils.entity_task(log, writes=[], fallback=_fallback_dem_quality_check)
 def dem_quality_check(gdir):
     """Run a simple quality check on the rgitopo DEMs
 
@@ -152,7 +146,7 @@ def dem_quality_check(gdir):
     sources = [f.name for f in os.scandir(gdir.dir) if f.is_dir()
                and not f.name.startswith('.')]
 
-    out = {}
+    out = dict(rgi_id=gdir.rgi_id)
     for s in sources:
         try:
             with rasterio.open(os.path.join(gdir.dir, s, 'dem.tif'), 'r',
@@ -160,19 +154,12 @@ def dem_quality_check(gdir):
                 topo = ds.read(1).astype(rasterio.float32)
                 topo[topo <= -999.] = np.NaN
                 topo[ds.read_masks(1) == 0] = np.NaN
-
             valid_mask = np.isfinite(topo) & mask
             if np.all(~valid_mask):
                 continue
-
-            z_on_glacier = topo[valid_mask]
-            zmax, zmin = np.nanmax(z_on_glacier), np.nanmin(z_on_glacier)
-            if zmin == zmax:
+            if np.nanmax(topo[valid_mask]) == 0:
                 continue
-
             out[s] = valid_mask.sum() / area
-
         except BaseException:
             pass
-
     return out

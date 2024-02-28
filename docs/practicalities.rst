@@ -244,7 +244,7 @@ Data storage
 
 **‣ Input**
 
-OGGM needs a certain amount of data to run (see :doc:`input-data`). Regardless
+OGGM needs a certain amount of data to run (see :doc:`shop`). Regardless
 if you are using pre-processed directories or raw data, you will need to have
 access to them from your environment. The default in OGGM is to download
 the data and store it in a folder, specified in the ``$HOME/.oggm_config``
@@ -367,11 +367,6 @@ consequences, some might change the model results. As an example, updates in
 the interpolation routines of GDAL/rasterio can change the glacier
 topography in a non-traceable way for OGGM. This is an obstacle to
 reproducible science, and we should try to avoid these situations.
-
-Therefore, we have written :doc:`oeps/oep--0001-dependencies`
-as a tool to guide our decision regarding software dependencies in OGGM.
-This document also lists some example situations affecting model users and
-developers.
 
 .. important::
 

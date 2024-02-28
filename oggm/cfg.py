@@ -28,7 +28,7 @@ try:
 except ImportError:
     pass
 
-from oggm.exceptions import InvalidParamsError
+from oggm.exceptions import InvalidParamsError, InvalidWorkflowError
 
 # Local logger
 log = logging.getLogger(__name__)
@@ -122,15 +122,9 @@ class ParamsLoggingDict(ResettingOrderedDict):
 
         prev = self.get(key)
         if prev is None:
-            if key in ['baseline_y0', 'baseline_y1']:
-                raise InvalidParamsError('The `baseline_y0` and `baseline_y1` '
-                                         'parameters have been removed. '
-                                         'You now have to set them explicitly '
-                                         'in your call to '
-                                         '`process_climate_data`.')
-
-            log.workflow('WARNING: adding an unknown parameter '
-                         '`{}`:`{}` to PARAMS.'.format(key, value))
+            if key not in ['prcp_fac']:
+                log.workflow('WARNING: adding an unknown parameter '
+                             '`{}`:`{}` to PARAMS.'.format(key, value))
             return
 
         if prev == value:
@@ -191,33 +185,42 @@ _doc = ('A glacier mask geotiff file with the same extend and projection as '
         ' value 0 at unglaciated points.')
 BASENAMES['glacier_mask'] = ('glacier_mask.tif', _doc)
 
-_doc = ('The glacier outlines in the local map projection (Transverse '
-        'Mercator).')
+_doc = ('The glacier outlines in the local map projection '
+        '(Transverse Mercator or UTM).')
 BASENAMES['outlines'] = ('outlines.shp', _doc)
 
-_doc = ('The glacier intersects in the local map projection (Transverse '
-        'Mercator).')
+_doc = 'The glacier intersects in the local map projection.'
 BASENAMES['intersects'] = ('intersects.shp', _doc)
 
 _doc = ('Each flowline has a catchment area computed from flow routing '
         'algorithms: this shapefile stores the catchment outlines (in the '
-        'local map projection (Transverse Mercator).')
+        'local map projection).')
 BASENAMES['flowline_catchments'] = ('flowline_catchments.shp', _doc)
 
 _doc = ('The intersections between catchments (shapefile) in the local map '
-        'projection (Transverse Mercator).')
+        'projection.')
 BASENAMES['catchments_intersects'] = ('catchments_intersects.shp', _doc)
 
 _doc = 'A ``salem.Grid`` handling the georeferencing of the local grid.'
 BASENAMES['glacier_grid'] = ('glacier_grid.json', _doc)
 
-_doc = 'A dictionary containing runtime diagnostics useful for debugging.'
+_doc = ('A dictionary containing runtime diagnostics useful for debugging or '
+        'logging of run parameters.')
 BASENAMES['diagnostics'] = ('diagnostics.json', _doc)
 
 _doc = ('A netcdf file containing several gridded data variables such as '
         'topography, the glacier masks, the interpolated 2D glacier bed, '
-        'and more.')
+        'and more. This is for static, non time-dependant data.')
 BASENAMES['gridded_data'] = ('gridded_data.nc', _doc)
+
+_doc = ('A csv file containing ice thickness observations from the GlaThiDa '
+        'database. Only available when added from the shop, and only for about 2800 '
+        'glaciers worldwide.')
+BASENAMES['glathida_data'] = ('glathida_data.csv', _doc)
+
+_doc = ('A netcdf file containing gridded data variables which are time '
+        'dependant. It has the same coordinates as `gridded_data`.')
+BASENAMES['gridded_simulation'] = ('gridded_simulation.nc', _doc)
 
 _doc = ('A dictionary containing the shapely.Polygons of a glacier. The '
         '"polygon_hr" entry contains the geometry transformed to the local '
@@ -244,7 +247,7 @@ BASENAMES['hypsometry'] = ('hypsometry.csv', _doc)
 _doc = 'A list of :py:class:`oggm.Centerline` instances, sorted by flow order.'
 BASENAMES['centerlines'] = ('centerlines.pkl', _doc)
 
-_doc = ('A "better" version of the Centerlines, now on a regular spacing '
+_doc = ('A "better" version of the centerlines, now on a regular spacing '
         'i.e., not on the gridded (i, j) indices. The tails of the '
         'tributaries are cut out to make more realistic junctions. '
         'They are now "1.5D" i.e., with a width.')
@@ -253,25 +256,18 @@ BASENAMES['inversion_flowlines'] = ('inversion_flowlines.pkl', _doc)
 _doc = 'The historical monthly climate timeseries stored in a netCDF file.'
 BASENAMES['climate_historical'] = ('climate_historical.nc', _doc)
 
-# so far, this is only ERA5_daily and does not work with the default OGGM
-# mass balance module
+# so far, this is only ERA5 or E5E5 daily and does not work with the default
+# OGGM mass balance module, only with sandbox
 _doc = ('The historical daily climate timeseries stored in a netCDF file.'
         '(only temperature is really changing on daily basis,'
         'precipitation is just assumed constant for every day')
 BASENAMES['climate_historical_daily'] = ('climate_historical_daily.nc', _doc)
 
-_doc = 'Deprecated: old name for `climate_historical`.'
-BASENAMES['climate_monthly'] = ('climate_monthly.nc', _doc)
-
-_doc = ('Some information (dictionary) about the mass '
-        'balance parameters for this glacier.')
-BASENAMES['climate_info'] = ('climate_info.json', _doc)
+_doc = "A dict containing the glacier's mass balance calibration parameters."
+BASENAMES['mb_calib'] = ('mb_calib.json', _doc)
 
 _doc = 'The monthly GCM climate timeseries stored in a netCDF file.'
 BASENAMES['gcm_data'] = ('gcm_data.nc', _doc)
-
-_doc = "A dict containing the glacier's t*, bias, and the flowlines' mu*"
-BASENAMES['local_mustar'] = ('local_mustar.json', _doc)
 
 _doc = 'List of dicts containing the data needed for the inversion.'
 BASENAMES['inversion_input'] = ('inversion_input.pkl', _doc)
@@ -286,11 +282,8 @@ _doc = ('When using a linear mass balance for the inversion, this dict stores '
         'the optimal ela_h and grad.')
 BASENAMES['linear_mb_params'] = ('linear_mb_params.pkl', _doc)
 
-_doc = 'Deprecated: renamed to `model_geometry`.'
-BASENAMES['model_run'] = ('model_run.nc', _doc)
-
 _doc = ('A netcdf file containing enough information to reconstruct the '
-        'entire flowline glacier geometry along the run (can be expensive'
+        'entire flowline glacier geometry along the run (can be expensive '
         'in disk space).')
 BASENAMES['model_geometry'] = ('model_geometry.nc', _doc)
 
@@ -307,7 +300,7 @@ _doc = "A table containing the Huss&Farinotti 2012 squeezed flowlines."
 BASENAMES['elevation_band_flowline'] = ('elevation_band_flowline.csv', _doc)
 
 
-def set_logging_config(logging_level='INFO', future=False):
+def set_logging_config(logging_level='INFO'):
     """Set the global logger parameters.
 
     Logging levels:
@@ -319,14 +312,16 @@ def set_logging_config(logging_level='INFO', future=False):
         Print confirmation that things are working as expected, e.g. when
         each task is run correctly (this is the default).
     WARNING
-        Indication that something unexpected happened on a glacier,
-        but that OGGM is still working on this glacier.
+        Do not print INFO or DEBUG but print WARNING (which indicate that
+        something unexpected happened on a glacier but that OGGM is
+        still working on this glacier).
     ERROR
         Print workflow messages and errors only, e.g. when a glacier cannot
         run properly.
     WORKFLOW
         Print only high level, workflow information (typically, one message
-        per task). Errors and warnings will NOT be printed.
+        per task). Errors and warnings will NOT be printed. This is the level
+        we recommend for operational large-scale runs.
     CRITICAL
         Print nothing but fatal errors.
 
@@ -336,8 +331,6 @@ def set_logging_config(logging_level='INFO', future=False):
         the logging level. See description above for a list of options. Setting
         to `None` is equivalent to `'CRITICAL'`, i.e. no log output will be
         generated.
-    future : bool
-        use the new behavior of logging='WORKFLOW'.
     """
 
     # Add a custom level - just for us
@@ -370,31 +363,12 @@ def set_logging_config(logging_level='INFO', future=False):
 
     logging_level = logging_level.upper()
 
-    # Deprecation warning
-    if logging_level == 'WORKFLOW' and not future:
-
-        msg = ('In future versions of OGGM, the logging config WORKFLOW '
-               'will no longer print ERROR or WARNING messages, but only high '
-               'level information (i.e. hiding potential errors in your code '
-               'but also avoiding cluttered log files for runs with '
-               'many expected errors, e.g. global runs). If you want to obtain '
-               'a similar logger behavior as before, set '
-               "`logging_level='WARNING'`, which will print high level info "
-               "as well as errors and warnings during the run. If you "
-               "want to use the new behavior and suppress this warning, "
-               "set `logging_level='WORKFLOW'` and `future=True`.")
-        warnings.warn(msg, category=FutureWarning)
-
-        # Set old behavior
-        logging_level = 'WARNING'
-
     logging.basicConfig(format='%(asctime)s: %(name)s: %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S',
                         level=getattr(logging, logging_level))
 
 
-def initialize_minimal(file=None, logging_level='INFO', params=None,
-                       future=False):
+def initialize_minimal(file=None, logging_level='INFO', params=None):
     """Same as initialise() but without requiring any download of data.
 
     This is useful for "flowline only" OGGM applications
@@ -407,14 +381,12 @@ def initialize_minimal(file=None, logging_level='INFO', params=None,
         set a logging level. See :func:`set_logging_config` for options.
     params : dict
         overrides for specific parameters from the config file
-    future : bool
-        use the new behavior of logging='WORKFLOW'.
     """
     global IS_INITIALIZED
     global PARAMS
     global PATHS
 
-    set_logging_config(logging_level=logging_level, future=future)
+    set_logging_config(logging_level=logging_level)
 
     is_default = False
     if file is None:
@@ -509,25 +481,24 @@ def initialize_minimal(file=None, logging_level='INFO', params=None,
     # Some non-trivial params
     PARAMS['continue_on_error'] = cp.as_bool('continue_on_error')
     PARAMS['grid_dx_method'] = cp['grid_dx_method']
+    PARAMS['map_proj'] = cp['map_proj']
     PARAMS['topo_interp'] = cp['topo_interp']
+    PARAMS['clip_dem_to_zero'] = cp.as_bool('clip_dem_to_zero')
     PARAMS['use_intersects'] = cp.as_bool('use_intersects')
     PARAMS['use_compression'] = cp.as_bool('use_compression')
     PARAMS['border'] = cp.as_int('border')
     PARAMS['mpi_recv_buf_size'] = cp.as_int('mpi_recv_buf_size')
     PARAMS['use_multiple_flowlines'] = cp.as_bool('use_multiple_flowlines')
     PARAMS['filter_min_slope'] = cp.as_bool('filter_min_slope')
+    PARAMS['downstream_line_shape'] = cp['downstream_line_shape']
     PARAMS['auto_skip_task'] = cp.as_bool('auto_skip_task')
-    PARAMS['correct_for_neg_flux'] = cp.as_bool('correct_for_neg_flux')
-    PARAMS['filter_for_neg_flux'] = cp.as_bool('filter_for_neg_flux')
-    PARAMS['run_mb_calibration'] = cp.as_bool('run_mb_calibration')
     PARAMS['rgi_version'] = cp['rgi_version']
     PARAMS['use_rgi_area'] = cp.as_bool('use_rgi_area')
     PARAMS['compress_climate_netcdf'] = cp.as_bool('compress_climate_netcdf')
     PARAMS['use_tar_shapefiles'] = cp.as_bool('use_tar_shapefiles')
-    PARAMS['clip_mu_star'] = cp.as_bool('clip_mu_star')
+    PARAMS['keep_multipolygon_outlines'] = cp.as_bool('keep_multipolygon_outlines')
     PARAMS['clip_tidewater_border'] = cp.as_bool('clip_tidewater_border')
     PARAMS['dl_verify'] = cp.as_bool('dl_verify')
-    PARAMS['calving_line_extension'] = cp.as_int('calving_line_extension')
     PARAMS['use_kcalving_for_inversion'] = cp.as_bool('use_kcalving_for_inversion')
     PARAMS['use_kcalving_for_run'] = cp.as_bool('use_kcalving_for_run')
     PARAMS['calving_use_limiter'] = cp.as_bool('calving_use_limiter')
@@ -541,38 +512,29 @@ def initialize_minimal(file=None, logging_level='INFO', params=None,
     PARAMS['baseline_climate'] = cp['baseline_climate'].strip().upper()
     PARAMS['hydro_month_nh'] = cp.as_int('hydro_month_nh')
     PARAMS['hydro_month_sh'] = cp.as_int('hydro_month_sh')
-    PARAMS['climate_qc_months'] = cp.as_int('climate_qc_months')
-    PARAMS['temp_use_local_gradient'] = cp.as_bool('temp_use_local_gradient')
-    PARAMS['tstar_search_glacierwide'] = cp.as_bool('tstar_search_glacierwide')
     PARAMS['geodetic_mb_period'] = cp['geodetic_mb_period']
-    PARAMS['use_winter_prcp_factor'] = cp.as_bool('use_winter_prcp_factor')
+    PARAMS['use_winter_prcp_fac'] = cp.as_bool('use_winter_prcp_fac')
+    PARAMS['use_temp_bias_from_file'] = cp.as_bool('use_temp_bias_from_file')
 
-    k = 'winter_prcp_factor_ab'
+    k = 'winter_prcp_fac_ab'
     PARAMS[k] = [float(vk) for vk in cp.as_list(k)]
-    k = 'winter_prcp_factor_range'
-    PARAMS[k] = [float(vk) for vk in cp.as_list(k)]
-    k = 'temp_local_gradient_bounds'
-    PARAMS[k] = [float(vk) for vk in cp.as_list(k)]
-    k = 'tstar_search_window'
-    PARAMS[k] = [int(vk) for vk in cp.as_list(k)]
     k = 'ref_mb_valid_window'
     PARAMS[k] = [int(vk) for vk in cp.as_list(k)]
-    PARAMS['use_bias_for_run'] = cp.as_bool('use_bias_for_run')
     k = 'free_board_marine_terminating'
     PARAMS[k] = [float(vk) for vk in cp.as_list(k)]
     k = 'store_diagnostic_variables'
     PARAMS[k] = [str(vk) for vk in cp.as_list(k)]
     k = 'store_fl_diagnostic_variables'
     PARAMS[k] = [str(vk) for vk in cp.as_list(k)]
-
-    # Inversion
-    k = 'use_shape_factor_for_inversion'
-    PARAMS[k] = cp[k]
+    k = 'by_bin_dx'
+    PARAMS[k] = [float(vk) for vk in cp.as_list(k)]
+    k = 'by_bin_bins'
+    PARAMS[k] = [float(vk) for vk in cp.as_list(k)]
 
     # Flowline model
-    k = 'use_shape_factor_for_fluxbasedmodel'
-    PARAMS[k] = cp[k]
     k = 'glacier_length_method'
+    PARAMS[k] = cp[k]
+    k = 'evolution_model'
     PARAMS[k] = cp[k]
 
     # Others
@@ -580,32 +542,36 @@ def initialize_minimal(file=None, logging_level='INFO', params=None,
 
     # Precip factor can be none
     try:
-        PARAMS['prcp_scaling_factor'] = cp.as_float('prcp_scaling_factor')
+        PARAMS['prcp_fac'] = cp.as_float('prcp_fac')
     except ValueError:
-        PARAMS['prcp_scaling_factor'] = None
+        PARAMS['prcp_fac'] = None
 
-     # Delete non-floats
+    # This also
+    try:
+        PARAMS['calving_line_extension'] = cp.as_int('calving_line_extension')
+    except ValueError:
+        PARAMS['calving_line_extension'] = None
+
+    # Delete non-floats
     ltr = ['working_dir', 'dem_file', 'climate_file', 'use_tar_shapefiles',
-           'grid_dx_method', 'run_mb_calibration', 'compress_climate_netcdf',
-           'mp_processes', 'use_multiprocessing', 'climate_qc_months',
-           'temp_use_local_gradient', 'temp_local_gradient_bounds',
+           'grid_dx_method', 'compress_climate_netcdf', 'by_bin_dx',
+           'mp_processes', 'use_multiprocessing', 'clip_dem_to_zero',
            'topo_interp', 'use_compression', 'bed_shape', 'continue_on_error',
-           'use_multiple_flowlines', 'tstar_search_glacierwide', 'border',
-           'mpi_recv_buf_size', 'hydro_month_nh', 'clip_mu_star',
-           'tstar_search_window', 'use_bias_for_run', 'hydro_month_sh',
+           'use_multiple_flowlines', 'border', 'use_temp_bias_from_file',
+           'mpi_recv_buf_size', 'map_proj', 'evolution_model',
+           'hydro_month_sh', 'hydro_month_nh', 'by_bin_bins',
            'use_intersects', 'filter_min_slope', 'clip_tidewater_border',
-           'auto_skip_task', 'correct_for_neg_flux', 'filter_for_neg_flux',
+           'auto_skip_task', 'ref_mb_valid_window',
            'rgi_version', 'dl_verify', 'use_mp_spawn', 'calving_use_limiter',
-           'use_shape_factor_for_inversion', 'use_rgi_area',
-           'use_shape_factor_for_fluxbasedmodel', 'baseline_climate',
+           'use_rgi_area', 'baseline_climate',
            'calving_line_extension', 'use_kcalving_for_run', 'lru_maxsize',
            'free_board_marine_terminating', 'use_kcalving_for_inversion',
            'error_when_glacier_reaches_boundaries', 'glacier_length_method',
-           'use_inversion_params_for_run', 'ref_mb_valid_window',
-           'tidewater_type', 'store_model_geometry', 'use_winter_prcp_factor',
+           'use_inversion_params_for_run',
+           'tidewater_type', 'store_model_geometry', 'use_winter_prcp_fac',
            'store_diagnostic_variables', 'store_fl_diagnostic_variables',
-           'geodetic_mb_period', 'store_fl_diagnostics', 'winter_prcp_factor_ab',
-           'winter_prcp_factor_range', 'prcp_scaling_factor']
+           'geodetic_mb_period', 'store_fl_diagnostics', 'winter_prcp_fac_ab',
+           'prcp_fac', 'downstream_line_shape', 'keep_multipolygon_outlines']
     for k in ltr:
         cp.pop(k, None)
 
@@ -619,7 +585,7 @@ def initialize_minimal(file=None, logging_level='INFO', params=None,
     IS_INITIALIZED = True
 
 
-def initialize(file=None, logging_level='INFO', params=None, future=False):
+def initialize(file=None, logging_level='INFO', params=None):
     """Read the configuration file containing the run's parameters.
 
     This should be the first call, before using any of the other OGGM modules
@@ -633,20 +599,17 @@ def initialize(file=None, logging_level='INFO', params=None, future=False):
         set a logging level. See :func:`set_logging_config` for options.
     params : dict
         overrides for specific parameters from the config file
-    future : bool
-        use the new behavior of logging='WORKFLOW'.
     """
     global PARAMS
     global DATA
 
-    initialize_minimal(file=file, logging_level=logging_level, params=params,
-                       future=future)
+    initialize_minimal(file=file, logging_level=logging_level, params=params)
 
     # Do not spam
     PARAMS.do_log = False
 
     # Make sure we have a proper cache dir
-    from oggm.utils import download_oggm_files, get_demo_file
+    from oggm.utils import download_oggm_files
     download_oggm_files()
 
     # Read in the demo glaciers
@@ -724,6 +687,8 @@ def oggm_static_paths():
         edir = os.path.abspath(os.environ.get('OGGM_EXTRACT_DIR'))
         config['tmp_dir'] = os.path.join(edir, 'tmp')
         config['rgi_dir'] = os.path.join(edir, 'rgi')
+    if os.environ.get('OGGM_RGI_DIR') is not None:
+        config['rgi_dir'] = os.path.abspath(os.environ.get('OGGM_RGI_DIR'))
 
     # Fill the PATH dict
     for k, v in config.iteritems():
@@ -833,13 +798,13 @@ def pack_config():
 
     return {
         'IS_INITIALIZED': IS_INITIALIZED,
-        'PARAMS': PARAMS,
-        'PATHS': PATHS,
-        'LRUHANDLERS': LRUHANDLERS,
-        'DATA': DATA,
+        'PARAMS': dict(PARAMS),
+        'PATHS': dict(PATHS),
+        'LRUHANDLERS': dict(LRUHANDLERS),
+        'DATA': dict(DATA),
         'BASENAMES': dict(BASENAMES),
-        'DL_VERIFIED': DL_VERIFIED,
-        'DEM_SOURCE_TABLE': DEM_SOURCE_TABLE
+        'DL_VERIFIED': dict(DL_VERIFIED),
+        'DEM_SOURCE_TABLE': dict(DEM_SOURCE_TABLE)
     }
 
 
@@ -850,12 +815,25 @@ def unpack_config(cfg_dict):
     global DL_VERIFIED, DEM_SOURCE_TABLE
 
     IS_INITIALIZED = cfg_dict['IS_INITIALIZED']
-    PARAMS = cfg_dict['PARAMS']
-    PATHS = cfg_dict['PATHS']
-    LRUHANDLERS = cfg_dict['LRUHANDLERS']
-    DATA = cfg_dict['DATA']
-    DL_VERIFIED = cfg_dict['DL_VERIFIED']
-    DEM_SOURCE_TABLE = cfg_dict['DEM_SOURCE_TABLE']
+
+    prev_log = PARAMS.do_log
+    PARAMS.do_log = False
+
+    PARAMS.clear()
+    PATHS.clear()
+    LRUHANDLERS.clear()
+    DATA.clear()
+    DL_VERIFIED.clear()
+    DEM_SOURCE_TABLE.clear()
+
+    PARAMS.update(cfg_dict['PARAMS'])
+    PATHS.update(cfg_dict['PATHS'])
+    LRUHANDLERS.update(cfg_dict['LRUHANDLERS'])
+    DATA.update(cfg_dict['DATA'])
+    DL_VERIFIED.update(cfg_dict['DL_VERIFIED'])
+    DEM_SOURCE_TABLE.update(cfg_dict['DEM_SOURCE_TABLE'])
+
+    PARAMS.do_log = prev_log
 
     # BASENAMES is a DocumentedDict, which cannot be pickled because
     # set intentionally mismatches with get

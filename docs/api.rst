@@ -1,6 +1,6 @@
-#############
-API Reference
-#############
+################################
+List of OGGM functions and tasks
+################################
 
 .. currentmodule:: oggm
 
@@ -29,12 +29,9 @@ Tools to set-up and run OGGM.
     workflow.init_glacier_directories
     workflow.execute_entity_task
     workflow.gis_prepro_tasks
-    workflow.download_ref_tstars
-    workflow.climate_tasks
     workflow.inversion_tasks
     workflow.merge_glacier_tasks
     workflow.calibrate_inversion_from_consensus
-    workflow.match_regional_geodetic_mb
 
 Troubleshooting
 ===============
@@ -74,6 +71,7 @@ Input/Output
     global_tasks.compile_task_time
     global_tasks.compile_fixed_geometry_mass_balance
     global_tasks.compile_climate_statistics
+    global_tasks.compile_ela
 
 OGGM Shop
 =========
@@ -131,13 +129,11 @@ the majority of OGGM's tasks). They are parallelizable.
     tasks.terminus_width_correction
     tasks.elevation_band_flowline
     tasks.fixed_dx_elevation_band_flowline
-    tasks.glacier_mu_candidates
     tasks.process_climate_data
     tasks.process_custom_climate_data
-    tasks.historical_delta_method
-    tasks.historical_climate_qc
-    tasks.local_t_star
-    tasks.mu_star_calibration
+    tasks.mb_calibration_from_scalar_mb
+    tasks.mb_calibration_from_geodetic_mb
+    tasks.mb_calibration_from_wgms_mb
     tasks.apparent_mb_from_linear_mb
     tasks.apparent_mb_from_any_mb
     tasks.fixed_geometry_mass_balance
@@ -148,24 +144,24 @@ the majority of OGGM's tasks). They are parallelizable.
     tasks.process_ecmwf_data
     tasks.process_gcm_data
     tasks.process_cesm_data
-    tasks.process_cmip5_data
     tasks.process_cmip_data
+    tasks.historical_delta_method
     tasks.prepare_for_inversion
     tasks.mass_conservation_inversion
     tasks.filter_inversion_output
     tasks.get_inversion_volume
-    tasks.compute_velocities
+    tasks.compute_inversion_velocities
     tasks.distribute_thickness_per_altitude
     tasks.distribute_thickness_interp
-    tasks.find_inversion_calving
     tasks.find_inversion_calving_from_any_mb
     tasks.init_present_time_glacier
     tasks.flowline_model_run
     tasks.run_random_climate
     tasks.run_from_climate_data
     tasks.run_constant_climate
+    tasks.merge_consecutive_run_outputs
     tasks.run_dynamic_spinup
-    tasks.run_dynamic_mu_star_calibration
+    tasks.run_dynamic_melt_f_calibration
     tasks.copy_to_basedir
     tasks.gdir_to_tar
 
@@ -183,12 +179,9 @@ but might use multiprocessing internally.
     :nosignatures:
 
     global_tasks.gis_prepro_tasks
-    global_tasks.climate_tasks
     global_tasks.inversion_tasks
     global_tasks.calibrate_inversion_from_consensus
-    global_tasks.match_regional_geodetic_mb
     global_tasks.merge_glacier_tasks
-    global_tasks.compute_ref_t_stars
     global_tasks.get_ref_mb_glaciers
     global_tasks.write_centerlines_to_shape
     global_tasks.compile_run_output
@@ -265,8 +258,11 @@ pre-processed state available on the OGGM servers:
     cfg.initialize()  # always initialize before an OGGM task
     # The working directory is where OGGM will store the run's data
     cfg.PATHS['working_dir'] = os.path.join(gettempdir(), 'Docs_GlacierDir')
+    # The base url is where to find the pre-processed directories
+    base_url = 'https://cluster.klima.uni-bremen.de/~oggm/gdirs/oggm_v1.6/L1-L2_files/elev_bands/'
     gdirs = workflow.init_glacier_directories('RGI60-11.00897',
                                               from_prepro_level=1,
+                                              prepro_base_url=base_url,
                                               prepro_border=10)
     gdir = gdirs[0]  # init_glacier_directories always returns a list
 
@@ -371,7 +367,7 @@ Models
     :nosignatures:
 
     LinearMassBalance
-    PastMassBalance
+    MonthlyTIModel
     ConstantMassBalance
     RandomMassBalance
     UncertainMassBalance
@@ -435,20 +431,22 @@ Access
 
 The easiest and most common way to access the model flowlines of a glacier is
 with its GlacierDirectory. For this we initialize a minimal working example
-including the model flowlines. This is achieved by choosing preprocessing level
-4.
+including the model flowlines. This is achieved by choosing preprocessing
+level 5.
 
 .. ipython:: python
 
     import os
     import oggm
-    from oggm import cfg, workflow
+    from oggm import cfg, workflow, DEFAULT_BASE_URL
     from oggm.utils import gettempdir
     cfg.initialize()  # always initialize before an OGGM task
     # The working directory is where OGGM will store the run's data
     cfg.PATHS['working_dir'] = os.path.join(gettempdir(), 'Docs_GlacierDir2')
+    # The prepro_base_url is where to find the pre-processed directories
     gdirs = workflow.init_glacier_directories('RGI60-11.00897',
                                               from_prepro_level=5,
+                                              prepro_base_url=DEFAULT_BASE_URL,
                                               prepro_border=80)
     gdir = gdirs[0]  # init_glacier_directories always returns a list
 

@@ -5,12 +5,13 @@ import logging
 from collections import OrderedDict
 import itertools
 import textwrap
+import xarray as xr
 
-import matplotlib.colors as colors
+import matplotlib
+from matplotlib import colors
 import matplotlib.pyplot as plt
 import numpy as np
 import shapely.geometry as shpg
-from matplotlib import cm as colormap
 
 try:
     import salem
@@ -30,9 +31,10 @@ log = logging.getLogger(__name__)
 def set_oggm_cmaps():
     # Set global colormaps
     global OGGM_CMAPS
-    OGGM_CMAPS['terrain'] = colormap.terrain
-    OGGM_CMAPS['section_thickness'] = plt.cm.get_cmap('YlGnBu')
-    OGGM_CMAPS['glacier_thickness'] = plt.get_cmap('viridis')
+    OGGM_CMAPS['terrain'] = matplotlib.colormaps['terrain']
+    OGGM_CMAPS['section_thickness'] = matplotlib.colormaps['YlGnBu']
+    OGGM_CMAPS['glacier_thickness'] = matplotlib.colormaps['viridis']
+    OGGM_CMAPS['ice_velocity'] = matplotlib.colormaps['Reds']
 
 
 set_oggm_cmaps()
@@ -50,7 +52,7 @@ def gencolor_generator(n, cmap='Set1'):
     """ Color generator intended to work with qualitative color scales."""
     # don't use more than 9 discrete colors
     n_colors = min(n, 9)
-    cmap = colormap.get_cmap(cmap, n_colors)
+    cmap = matplotlib.colormaps[cmap]
     colors = cmap(range(n_colors))
     for i in range(n):
         yield colors[i % n_colors]
@@ -112,6 +114,8 @@ def _plot_map(plotfunc):
         save the figure to a file instead of displaying it
     savefig_kwargs : dict, optional
         the kwargs to plt.savefig
+    extend_plot_limit : bool, optional
+        set to True to extend the plotting limits for all provided gdirs grids
     """
 
     # Build on the original docstring
@@ -122,7 +126,7 @@ def _plot_map(plotfunc):
                     title_comment=None, horizontal_colorbar=False,
                     lonlat_contours_kwargs=None, cbar_ax=None, autosave=False,
                     add_scalebar=True, figsize=None, savefig=None,
-                    savefig_kwargs=None,
+                    savefig_kwargs=None, extend_plot_limit=False,
                     **kwargs):
 
         dofig = False
@@ -135,8 +139,13 @@ def _plot_map(plotfunc):
         gdirs = utils.tolist(gdirs)
 
         if smap is None:
-            mp = salem.Map(gdirs[0].grid, countries=False,
-                           nx=gdirs[0].grid.nx)
+            if extend_plot_limit:
+                grid_combined = utils.combine_grids(gdirs)
+                mp = salem.Map(grid_combined, countries=False,
+                               nx=grid_combined.nx)
+            else:
+                mp = salem.Map(gdirs[0].grid, countries=False,
+                               nx=gdirs[0].grid.nx)
         else:
             mp = smap
 
@@ -492,12 +501,13 @@ def plot_catchment_width(gdirs, ax=None, smap=None, corrected=False,
 
             if add_touches:
                 pok = np.where(l.is_rectangular)
-                xi, yi = l.line.xy
-                xi, yi = ogrid.transform(np.asarray(xi)[pok],
-                                         np.asarray(yi)[pok], crs=crs)
-                xis.append(xi)
-                yis.append(yi)
-                cis.append(c)
+                if np.size(pok[0]) != 0:
+                    xi, yi = l.line.xy
+                    xi, yi = ogrid.transform(np.asarray(xi)[pok],
+                                             np.asarray(yi)[pok], crs=crs)
+                    xis.append(xi)
+                    yis.append(yi)
+                    cis.append(c)
 
     smap.plot(ax)
     for xi, yi, c in zip(xis, yis, cis):
@@ -554,7 +564,7 @@ def plot_inversion(gdirs, ax=None, smap=None, linewidth=3, vmax=None,
                 toplot_crs.append(crs)
             vol.extend(c['volume'])
 
-    dl = salem.DataLevels(cmap=plt.get_cmap(color_map),
+    dl = salem.DataLevels(cmap=matplotlib.colormaps[color_map],
                           data=toplot_var, vmin=0, vmax=vmax)
     colors = dl.to_rgb()
     for l, c, crs in zip(toplot_lines, colors, toplot_crs):
@@ -583,7 +593,10 @@ def plot_distributed_thickness(gdirs, ax=None, smap=None, varname_suffix=''):
     with utils.ncDataset(gdir.get_filepath('gridded_data')) as nc:
         topo = nc.variables['topo'][:]
 
-    smap.set_topography(topo)
+    try:
+        smap.set_topography(topo)
+    except ValueError:
+        pass
 
     for gdir in gdirs:
         grids_file = gdir.get_filepath('gridded_data')
@@ -622,8 +635,31 @@ def plot_distributed_thickness(gdirs, ax=None, smap=None, varname_suffix=''):
 @_plot_map
 def plot_modeloutput_map(gdirs, ax=None, smap=None, model=None,
                          vmax=None, linewidth=3, filesuffix='',
-                         modelyr=None):
-    """Plots the result of the model output."""
+                         modelyr=None, plotting_var='thickness'):
+    """Plots the result of the model output.
+
+    Parameters
+    ----------
+    gdirs
+    ax
+    smap
+    model
+    vmax
+    linewidth
+    filesuffix
+    modelyr
+    plotting_var : str
+        Defines which variable should be plotted. Options are 'thickness'
+        (default) and 'velocity'. If you want to plot velocity the flowline
+        diagnostics of the run are needed (set
+        cfg.PARAMS['store_fl_diagnostics'] = True, before the
+        actual simulation) and be aware that there is no velocity available for
+        the first year of the simulation.
+
+    Returns
+    -------
+
+    """
 
     gdir = gdirs[0]
     with utils.ncDataset(gdir.get_filepath('gridded_data')) as nc:
@@ -635,7 +671,7 @@ def plot_modeloutput_map(gdirs, ax=None, smap=None, model=None,
     except ValueError:
         pass
 
-    toplot_th = np.array([])
+    toplot_var = np.array([])
     toplot_lines = []
     toplot_crs = []
 
@@ -648,6 +684,10 @@ def plot_modeloutput_map(gdirs, ax=None, smap=None, model=None,
             models.append(model)
     else:
         models = utils.tolist(model)
+
+    if modelyr is None:
+        modelyr = models[0].yr
+
     for gdir, model in zip(gdirs, models):
         geom = gdir.read_pickle('geometries')
         poly_pix = geom['polygon_pix']
@@ -660,12 +700,21 @@ def plot_modeloutput_map(gdirs, ax=None, smap=None, model=None,
             for l in _poly.interiors:
                 smap.set_geometry(l, crs=crs, color='black', linewidth=0.5)
 
+        if plotting_var == 'velocity':
+            f_fl_diag = gdir.get_filepath('fl_diagnostics',
+                                          filesuffix=filesuffix)
+
         # plot Centerlines
         cls = model.fls
-        for l in cls:
+        for fl_id, l in enumerate(cls):
             smap.set_geometry(l.line, crs=crs, color='gray',
                               linewidth=1.2, zorder=50)
-            toplot_th = np.append(toplot_th, l.thick)
+            if plotting_var == 'thickness':
+                toplot_var = np.append(toplot_var, l.thick)
+            elif plotting_var == 'velocity':
+                with xr.open_dataset(f_fl_diag, group=f'fl_{fl_id}') as ds:
+                    toplot_var = np.append(toplot_var,
+                                           ds.sel(dict(time=modelyr)).ice_velocity_myr)
             widths = l.widths.copy()
             widths = np.where(l.thick > 0, widths, 0.)
             for wi, cur, (n1, n2) in zip(widths, l.line.coords, l.normals):
@@ -674,14 +723,20 @@ def plot_modeloutput_map(gdirs, ax=None, smap=None, model=None,
                 toplot_lines.append(line)
                 toplot_crs.append(crs)
 
-    dl = salem.DataLevels(cmap=OGGM_CMAPS['section_thickness'],
-                          data=toplot_th, vmin=0, vmax=vmax)
+    if plotting_var == 'thickness':
+        cmap = OGGM_CMAPS['section_thickness']
+        cbar_label = 'Section thickness [m]'
+    elif plotting_var == 'velocity':
+        cmap = OGGM_CMAPS['ice_velocity']
+        cbar_label = 'Ice velocity [m yr-1]'
+    dl = salem.DataLevels(cmap=cmap,
+                          data=toplot_var, vmin=0, vmax=vmax)
     colors = dl.to_rgb()
     for l, c, crs in zip(toplot_lines, colors, toplot_crs):
         smap.set_geometry(l, crs=crs, color=c,
                           linewidth=linewidth, zorder=50)
     smap.plot(ax)
-    return dict(cbar_label='Section thickness [m]',
+    return dict(cbar_label=cbar_label,
                 cbar_primitive=dl,
                 title_comment=' -- year: {:d}'.format(np.int64(model.yr)))
 

@@ -78,21 +78,15 @@ def process_gcm_data(gdir, filesuffix='', prcp=None, temp=None,
     months = temp['time.month']
     if months[0] != 1:
         raise ValueError('We expect the files to start in January!')
-    if months[-1] < 10:
+    if months[-1] != 12:
         raise ValueError('We expect the files to end in December!')
 
     if (np.abs(temp['lon']) > 180) or (np.abs(prcp['lon']) > 180):
         raise ValueError('We expect the longitude coordinates to be within '
                          '[-180, 180].')
 
-    # from normal years to hydrological years
-    sm = cfg.PARAMS['hydro_month_' + gdir.hemisphere]
-    if sm != 1:
-        prcp = prcp[sm-1:sm-13].load()
-        temp = temp[sm-1:sm-13].load()
-
-    assert len(prcp) // 12 == len(prcp) / 12, 'Somehow we didn\'t get full years'
-    assert len(temp) // 12 == len(temp) / 12, 'Somehow we didn\'t get full years'
+    assert len(prcp) // 12 == len(prcp) / 12, "Somehow we didn't get full years"
+    assert len(temp) // 12 == len(temp) / 12, "Somehow we didn't get full years"
 
     # Get the reference data to apply the anomaly to
     fpath = gdir.get_filepath('climate_historical')
@@ -113,9 +107,6 @@ def process_gcm_data(gdir, filesuffix='', prcp=None, temp=None,
                                              'for this to work')
                 ts_tmp_std = ts_tmp_sel.groupby('time.month').std(dim='time')
                 std_fac = ds_ref.temp.groupby('time.month').std(dim='time') / ts_tmp_std
-                if sm != 1:
-                    # Just to avoid useless roll
-                    std_fac = std_fac.roll(month=13-sm, roll_coords=True)
                 std_fac = np.tile(std_fac.data, len(temp) // 12)
                 # We need an even number of years for this to work
                 win_size = len(ts_tmp_sel) + 1
@@ -183,11 +174,12 @@ def process_gcm_data(gdir, filesuffix='', prcp=None, temp=None,
 
 @entity_task(log, writes=['gcm_data'])
 def process_monthly_isimip_data(gdir, output_filesuffix='',
-                                ensemble='mri-esm2-0_r1i1p1f1',
+                                member='mri-esm2-0_r1i1p1f1',
                                 ssp='ssp126',
                                 year_range=('1979', '2014'),
                                 apply_bias_correction=False,
                                 testing=False,
+                                y0=None, y1=None,
                                 **kwargs):
     """Read, process and store the isimip3b gcm data for this glacier.
 
@@ -202,14 +194,14 @@ def process_monthly_isimip_data(gdir, output_filesuffix='',
     output_filesuffix : str
         append a suffix to the filename (useful for ensemble experiments).
         If it is not set, we create a filesuffix with applied ensemble and ssp
-    ensemble : str
-        ensemble gcm that you want to process
+    member : str
+        ensemble member gcm that you want to process
     ssp : str
-        ssp scenario to process (only 'ssp126' or 'ssp585' are available)
+        ssp scenario to process (only 'ssp126', 'ssp370' or 'ssp585' are available)
     year_range : tuple of str
         the year range for which the anomalies are computed
         (passed to process_gcm_gdata). Default for ISIMIP3b `('1979', '2014')
-    correct : bool
+    apply_bias_correction : bool
         whether the bias correction is applied (default is False) or not. As
         we use already internally bias-corrected GCMs, it is default set
         to False!
@@ -217,40 +209,60 @@ def process_monthly_isimip_data(gdir, output_filesuffix='',
         Default is False. If testing is set to True,
         the smaller test ISIMIP3b gcm files are downloaded
         instead (only useful for pytest)
+    y0 : int
+        start year of the ISIMIP3b data processing.
+        Default is None which processes the entire timeseries.
+        Set this to the beginning of your bias correction/
+        projection period minus half of bc period
+        to make processing faster.
+    y1 : int
+        end year of the CMIP data processing.
+        Set this to the end of your projection period
+        plus half of bc period. Default is None to process
+        the entire time series, same as y0.
     **kwargs: any kwarg to be passed to ref:`process_gcm_data`
     """
 
     if output_filesuffix == '':
         # recognize the gcm climate file for later
-        output_filesuffix = '_monthly_ISIMIP3b_{}_{}'.format(ensemble, ssp)
+        output_filesuffix = '_monthly_ISIMIP3b_{}_{}'.format(member, ssp)
 
     # Glacier location
     glon = gdir.cenlon
     glat = gdir.cenlat
+
+    if y0 is not None:
+        assert y0 < 2014, 'y0 has to be below 2014'
+    if y1 is not None:
+        assert y1 > 2014, 'y0 has to be above 2014 at the moment'
+
     if testing:
         gcm_server = 'https://cluster.klima.uni-bremen.de/~oggm/test_climate/'
     else:
         gcm_server = 'https://cluster.klima.uni-bremen.de/~oggm/'
 
-    path = f'{gcm_server}/cmip6/isimip3b/flat/monthly/'
+    path = f'{gcm_server}/cmip6/isimip3b/flat/2023.2/monthly/'
     add = '_global_monthly_flat_glaciers.nc'
 
-    fpath_spec = path + '{}_w5e5_'.format(ensemble) + '{ssp}_{var}' + add
+    fpath_spec = path + '{}_w5e5_'.format(member) + '{ssp}_{var}' + add
     fpath_temp = fpath_spec.format(var='tasAdjust', ssp=ssp)
     fpath_temp_h = fpath_spec.format(var='tasAdjust', ssp='historical')
-
     fpath_precip = fpath_spec.format(var='prAdjust', ssp=ssp)
     fpath_precip_h = fpath_spec.format(var='prAdjust', ssp='historical')
-    fpath_temp = utils.file_downloader(fpath_temp)
-    fpath_temp_h = utils.file_downloader(fpath_temp_h)
-
-    fpath_precip = utils.file_downloader(fpath_precip)
-    fpath_precip_h = utils.file_downloader(fpath_precip_h)
+    with utils.get_lock():
+        fpath_temp = utils.file_downloader(fpath_temp)
+        fpath_temp_h = utils.file_downloader(fpath_temp_h)
+        fpath_precip = utils.file_downloader(fpath_precip)
+        fpath_precip_h = utils.file_downloader(fpath_precip_h)
 
     # Read the GCM files
     with xr.open_dataset(fpath_temp_h, use_cftime=True) as tempds_hist, \
             xr.open_dataset(fpath_temp, use_cftime=True) as tempds_gcm:
-
+        # make processing faster
+        if y0 is not None:
+            tempds_hist = tempds_hist.sel(time=slice(str(y0), None))
+        if y1 is not None:
+            tempds_gcm = tempds_gcm.sel(time=slice(None, str(y1)))
         # Check longitude conventions
         if tempds_gcm.longitude.min() >= 0 and glon <= 0:
             glon += 360
@@ -277,7 +289,11 @@ def process_monthly_isimip_data(gdir, output_filesuffix='',
 
     with xr.open_dataset(fpath_precip_h, use_cftime=True) as precipds_hist, \
             xr.open_dataset(fpath_precip, use_cftime=True) as precipds_gcm:
-
+        # make processing faster
+        if y0 is not None:
+            precipds_hist = precipds_hist.sel(time=slice(str(y0), None))
+        if y1 is not None:
+            precipds_gcm = precipds_gcm.sel(time=slice(None, str(y1)))
         c = ((precipds_gcm.longitude - glon) ** 2 +
              (precipds_gcm.latitude - glat) ** 2)
         precip_a_gcm = precipds_gcm.isel(points=np.argmin(c.data))
@@ -290,12 +306,10 @@ def process_monthly_isimip_data(gdir, output_filesuffix='',
         precip['lat'] = precip_a.latitude
 
         # Back to [-180, 180] for OGGM
-        precip.lon.values = precip.lon if precip.lon <= 180 \
-            else precip.lon - 360
+        precip.lon.values = precip.lon if precip.lon <= 180 else precip.lon - 360
 
         # Convert kg m-2 s-1 to mm mth-1 => 1 kg m-2 = 1 mm !!!
-        assert 'kg m-2 s-1' in precip.units, \
-            'Precip units not understood'
+        assert 'kg m-2 s-1' in precip.units, 'Precip units not understood'
         ny, r = divmod(len(temp), 12)
         assert r == 0
         dimo = [cfg.DAYS_IN_MONTH[m - 1] for m in temp['time.month']]
@@ -406,17 +420,9 @@ def process_cesm_data(gdir, filesuffix='', fpath_temp=None, fpath_precc=None,
 
 
 @entity_task(log, writes=['gcm_data'])
-def process_cmip5_data(*args, **kwargs):
-    """Renamed to process_cmip_data.
-    """
-    warnings.warn('The task `process_cmip5_data` is deprecated and renamed '
-                  'to `process_cmip_data`.', FutureWarning)
-    process_cmip_data(*args, **kwargs)
-
-
-@entity_task(log, writes=['gcm_data'])
 def process_cmip_data(gdir, filesuffix='', fpath_temp=None,
-                      fpath_precip=None, **kwargs):
+                      fpath_precip=None, y0=None, y1=None,
+                      **kwargs):
     """Read, process and store the CMIP5 and CMIP6 climate data for this glacier.
 
     It stores the data in a format that can be used by the OGGM mass balance
@@ -433,6 +439,17 @@ def process_cmip_data(gdir, filesuffix='', fpath_temp=None,
         path to the temp file
     fpath_precip : str
         path to the precip file
+    y0 : int
+        start year of the CMIP data processing.
+        Default is None which processes the entire timeseries.
+        Set this to the beginning of your bias correction/
+        projection period minus half of bc period
+        to make process_cmip_data faster.
+    y1 : int
+        end year of the CMIP data processing.
+        Set this to the end of your projection period
+        plus half of bc period. Default is None to process
+        the entire time series, same as y0.
     **kwargs: any kwarg to be passed to ref:`process_gcm_data`
     """
 
@@ -440,18 +457,45 @@ def process_cmip_data(gdir, filesuffix='', fpath_temp=None,
     glon = gdir.cenlon
     glat = gdir.cenlat
 
+    if y0 is not None:
+        y0 = str(y0)
+    if y1 is not None:
+        y1 = str(y1)
     # Read the GCM files
     with xr.open_dataset(fpath_temp, use_cftime=True) as tempds, \
             xr.open_dataset(fpath_precip, use_cftime=True) as precipds:
 
+        # only process and save the gcm data selected --> saves some time!
+        if (y0 is not None) or (y1 is not None):
+            tempds = tempds.sel(time=slice(y0, y1))
+            precipds = precipds.sel(time=slice(y0, y1))
         # Check longitude conventions
         if tempds.lon.min() >= 0 and glon <= 0:
             glon += 360
 
         # Take the closest to the glacier
         # Should we consider GCM interpolation?
-        temp = tempds.tas.sel(lat=glat, lon=glon, method='nearest')
-        precip = precipds.pr.sel(lat=glat, lon=glon, method='nearest')
+        try:
+            # if gcms are not flattened, do:
+            # this is the default, so try this first
+            temp = tempds.tas.sel(lat=glat, lon=glon, method='nearest')
+            precip = precipds.pr.sel(lat=glat, lon=glon, method='nearest')
+        except:
+            # are the gcms flattened? if yes,
+            # compute all the distances and choose the
+            # nearest gridpoint
+            c_tempds = ((tempds.lon - glon) ** 2 +
+                 (tempds.lat - glat) ** 2)
+            c_precipds = ((precipds.lon - glon) ** 2 +
+                        (precipds.lat - glat) ** 2)
+            temp_0 = tempds.isel(points=np.argmin(c_tempds.data))
+            precip_0 = precipds.isel(points=np.argmin(c_precipds.data))
+            temp = temp_0.tas
+            temp['lon'] = temp_0.lon
+            temp['lat'] = temp_0.lat
+            precip = precip_0.pr
+            precip['lon'] = precip_0.lon
+            precip['lat'] = precip_0.lat
 
         # Back to [-180, 180] for OGGM
         temp.lon.values = temp.lon if temp.lon <= 180 else temp.lon - 360
