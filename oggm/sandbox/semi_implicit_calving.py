@@ -390,6 +390,10 @@ class SemiImplicitModel(FlowlineModel):
                     section[below_sl] = 0
                     fl.calving_bucket_m3 -= to_remove
                 elif to_remove > 0:
+                    # the conditions below I had to change them
+                    # to prevent index out-of-bounds errors
+                    # when updating the ice thickness near the calving front
+                    # NEEDS checking!
                     section[below_sl] = 0
                     if (last_above_wl + 1) < len(section):
                         section[last_above_wl + 1] = ((to_remove - fl.calving_bucket_m3)
