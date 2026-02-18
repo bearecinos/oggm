@@ -24,9 +24,9 @@ ECMWF_SERVER = 'https://cluster.klima.uni-bremen.de/~oggm/climate/'
 
 BASENAMES = {
     'ERA5': {
-        'inv': 'era5/monthly/v1.1/era5_invariant.nc',
-        'pre': 'era5/monthly/v1.1/era5_monthly_prcp_1979-2019.nc',
-        'tmp': 'era5/monthly/v1.1/era5_monthly_t2m_1979-2019.nc'
+        'inv': 'era5/monthly/v1.2/flattened/era5_glacier_invariant_flat_v2026.01.14.nc',
+        'pre': 'era5/monthly/v1.2/flattened/era5_tp_global_monthly_1940_2025_flat_glaciers_v2026.01.14.nc',
+        'tmp': 'era5/monthly/v1.2/flattened/era5_t2m_global_monthly_1940_2025_flat_glaciers_v2026.01.14.nc'
     },
     'ERA5L': {
         'inv': 'era5-land/monthly/v1.0/era5_land_invariant_flat.nc',
@@ -174,7 +174,12 @@ def process_ecmwf_data(gdir, dataset=None, ensemble_member=0,
         prcp = ds['tp'].data * 1000 * ds['time.daysinmonth']
     with xr.open_dataset(get_ecmwf_file(dataset, 'inv')) as ds:
         _check_ds_validity(ds)
-        ds = ds.isel(time=0)
+        try:
+            ds = ds.isel(time=0)
+        except (ValueError):
+            # new inv flattening files do not have any
+            # time dependencies anymore
+            pass
         try:
             ds = ds.sel(longitude=lon, latitude=lat, method='nearest')
         except (ValueError, KeyError):
