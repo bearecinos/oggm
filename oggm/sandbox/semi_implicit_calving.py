@@ -1,5 +1,5 @@
 from oggm.core.flowline import FlowlineModel
-from oggm.core.flowline import k_calving_law
+from oggm.core.flowline import k_calving_law, flux_gate_with_build_up
 from oggm.core.flowline import (RectangularBedFlowline,
                                 TrapezoidalBedFlowline,
                                 MixedBedFlowline)
@@ -9,6 +9,7 @@ from oggm.exceptions import InvalidParamsError, InvalidWorkflowError
 from oggm.cfg import G, GAUSSIAN_KERNEL
 from oggm import utils
 from scipy.linalg import solve_banded
+from functools import partial
 
 
 class SemiImplicitModel(FlowlineModel):
@@ -25,7 +26,11 @@ class SemiImplicitModel(FlowlineModel):
                  inplace=False, fixed_dt=None, cfl_number=0.5, min_dt=None,
                  do_calving=None, calving_k=None, calving_law=k_calving_law,
                  calving_use_limiter=None, calving_limiter_frac=None,
-                 water_level=1000,
+                 water_level=0.0,
+                 #flux based compatible API
+                 flux_gate = None,
+                 flux_gate_thickness = None,
+                 flux_gate_build_up = int(100),
                  **kwargs):
         """Instantiate the model.
 
@@ -90,7 +95,8 @@ class SemiImplicitModel(FlowlineModel):
 
         super(SemiImplicitModel, self).__init__(flowlines, mb_model=mb_model,
                                                 y0=y0, glen_a=glen_a, fs=fs,
-                                                inplace=inplace, **kwargs)
+                                                inplace=inplace,
+                                                water_level=water_level, **kwargs)
 
         if len(self.fls) > 1:
             raise ValueError('Implicit model does not work with '
@@ -100,11 +106,15 @@ class SemiImplicitModel(FlowlineModel):
         # lambda = 0
         if isinstance(self.fls[0], RectangularBedFlowline):
             self.fls[0] = TrapezoidalBedFlowline(
-                line=self.fls[-1].line, dx=self.fls[-1].dx,
-                map_dx=self.fls[-1].map_dx, surface_h=self.fls[-1].surface_h,
-                bed_h=self.fls[-1].bed_h, widths=self.fls[-1].widths,
+                line=self.fls[-1].line,
+                dx=self.fls[-1].dx,
+                map_dx=self.fls[-1].map_dx,
+                surface_h=self.fls[-1].surface_h,
+                bed_h=self.fls[-1].bed_h,
+                widths=self.fls[-1].widths,
                 lambdas=0, rgi_id=self.fls[-1].rgi_id,
-                water_level=self.fls[-1].water_level, gdir=None)
+                water_level=self.fls[-1].water_level,
+                gdir=None)
 
         if isinstance(self.fls[0], MixedBedFlowline):
             if ~np.all(self.fls[0].is_trapezoid):
@@ -158,6 +168,24 @@ class SemiImplicitModel(FlowlineModel):
         # Storage variables for diagnostics
         self.calving_m3_since_y0 = 0
         self.calving_rate_myr = 0
+
+        # Flux gate bookkeeping
+        self.flux_gate_m3_since_y0 = 0
+        self._flux_gate_current_m3s = 0.0 # what will
+        # record what enters as BC (influx) ever time step
+        self.flux_gate = None
+
+        # Convert float->build-up callable; accept callable directly
+        if flux_gate is not None:
+            try:
+                flux_gate(self.yr)  # type: ignore[misc]
+                self.flux_gate = flux_gate  # type: ignore[assignment]
+            except TypeError:
+                self.flux_gate = partial(
+                    flux_gate_with_build_up,
+                    flux_value=float(flux_gate),
+                    flux_gate_yr=(flux_gate_build_up + self.y0),
+                )
 
         # Special output
         self._surf_vel_fac = (self.glen_n + 2) / (self.glen_n + 1)
@@ -247,7 +275,9 @@ class SemiImplicitModel(FlowlineModel):
         return [flux_stag]
 
     def step(self, dt):
-        """Advance one step."""
+        """Advance one step: semi-implicit solve + post-solve calving.
+        Flux gate is applied as upstream Neumann BC by adjusting rhs[0].
+        """
 
         # Just a check to avoid useless computations
         if dt <= 0:
@@ -345,6 +375,18 @@ class SemiImplicitModel(FlowlineModel):
         # prepare rhs
         rhs = thick + smb * dt + dt / width * (b_corr[:-1] - b_corr[1:]) / dx
 
+        # ---- UPSTREAM FLUX GATE (Neumann BC) ----
+        # q_in is m3/s of ice. Convert to thickness tendency in first cell:
+        # dh/dt = q_in / (w0 * dx)  => rhs[0] += dt * q_in / (w0 * dx)
+
+        if self.flux_gate is not None:
+            q_in = float(self.flux_gate(self.yr))
+            self._flux_gate_current_m3s = q_in
+            self.flux_gate_m3_since_y0 += q_in * dt
+            if q_in != 0.0:
+                rhs[0] += dt * q_in / (width[0] * dx)
+
+
         # solve matrix and update flowline thickness
         thick_new = utils.clip_min(
             solve_banded((1, 1), self.d_matrix_banded, rhs),
@@ -360,67 +402,65 @@ class SemiImplicitModel(FlowlineModel):
             indices = np.nonzero((fl.surface_h > self.water_level) &
                                  (fl.thick > 0))[0]
 
-            if indices.size == 0:
-                # No ice above water level -> skip calving this step
-                return
+            if indices.size != 0:
+                # Identify last glacier grid cell with ice above water level
+                last_above_wl = int(indices[-1])
 
-            # Identify last glacier grid cell with ice above water level
-            last_above_wl = indices[-1]
+                # Proceed only if terminus bed is below water (marine-terminating)
+                if fl.bed_h[last_above_wl] <= self.water_level:
 
-            # Proceed only if terminus bed is below water (marine-terminating)
-            if fl.bed_h[last_above_wl] <= self.water_level:
+                    # OK, we're really calving
+                    section = fl.section
 
-                # OK, we're really calving
-                section = fl.section
+                    # Calving law
+                    q_calving = self.calving_law(self, fl, last_above_wl)
 
-                # Calving law
-                q_calving = self.calving_law(self, fl, last_above_wl)
+                    # Add to the bucket and the diagnostics
+                    fl.calving_bucket_m3 += q_calving * dt
+                    self.calving_m3_since_y0 += q_calving * dt
 
-                # Add to the bucket and the diagnostics
-                fl.calving_bucket_m3 += q_calving * dt
-                self.calving_m3_since_y0 += q_calving * dt
-                self.calving_rate_myr = (q_calving / section[last_above_wl] *
-                                         cfg.SEC_IN_YEAR)
+                    if section[last_above_wl] > 0:
+                        self.calving_rate_myr = (q_calving / section[last_above_wl]) * cfg.SEC_IN_YEAR
 
-                # See if we have ice below sea-water to clean out first
-                below_sl = (fl.surface_h < self.water_level) & (fl.thick > 0)
-                to_remove = np.sum(section[below_sl]) * fl.dx_meter
-                if 0 < to_remove < fl.calving_bucket_m3:
-                    # This is easy, we remove everything
-                    section[below_sl] = 0
-                    fl.calving_bucket_m3 -= to_remove
-                elif to_remove > 0:
-                    # the conditions below I had to change them
-                    # to prevent index out-of-bounds errors
-                    # when updating the ice thickness near the calving front
-                    # NEEDS checking!
-                    section[below_sl] = 0
-                    if (last_above_wl + 1) < len(section):
-                        section[last_above_wl + 1] = ((to_remove - fl.calving_bucket_m3)
-                                                      / fl.dx_meter)
-                    else:
-                        section[last_above_wl] = max(
-                            section[last_above_wl] - (to_remove - fl.calving_bucket_m3) / fl.dx_meter, 0)
-                    fl.calving_bucket_m3 = 0
-
-                # The rest of the bucket might calve an entire grid point (or more?)
-                vol_last = section[last_above_wl] * fl.dx_meter
-                while fl.calving_bucket_m3 > vol_last:
-                    fl.calving_bucket_m3 -= vol_last
-                    section[last_above_wl] = 0
-
-                    # OK check if we need to continue (unlikely)
-                    last_above_wl -= 1
-
-                    if last_above_wl < 0:
-                        # All ice is removed; no further calving possible
+                    # See if we have ice below sea-water to clean out first
+                    below_sl = (fl.surface_h < self.water_level) & (fl.thick > 0)
+                    to_remove = np.sum(section[below_sl]) * fl.dx_meter
+                    if 0 < to_remove < fl.calving_bucket_m3:
+                        # This is easy, we remove everything
+                        section[below_sl] = 0
+                        fl.calving_bucket_m3 -= to_remove
+                    elif to_remove > 0:
+                        # the conditions below I had to change them
+                        # to prevent index out-of-bounds errors
+                        # when updating the ice thickness near the calving front
+                        # NEEDS checking!
+                        section[below_sl] = 0
+                        if (last_above_wl + 1) < len(section):
+                            section[last_above_wl + 1] = ((to_remove - fl.calving_bucket_m3)
+                                                          / fl.dx_meter)
+                        else:
+                            section[last_above_wl] = max(
+                                section[last_above_wl] - (to_remove - fl.calving_bucket_m3) / fl.dx_meter, 0)
                         fl.calving_bucket_m3 = 0
-                        break
 
+                    # The rest of the bucket might calve an entire grid point (or more?)
                     vol_last = section[last_above_wl] * fl.dx_meter
+                    while fl.calving_bucket_m3 > vol_last:
+                        fl.calving_bucket_m3 -= vol_last
+                        section[last_above_wl] = 0
 
-                # We update the glacier with our changes
-                fl.section = section
+                        # OK check if we need to continue (unlikely)
+                        last_above_wl -= 1
+
+                        if last_above_wl < 0:
+                            # All ice is removed; no further calving possible
+                            fl.calving_bucket_m3 = 0
+                            break
+
+                        vol_last = section[last_above_wl] * fl.dx_meter
+
+                    # We update the glacier with our changes
+                    fl.section = section
 
         # Next step
         self.t += dt
