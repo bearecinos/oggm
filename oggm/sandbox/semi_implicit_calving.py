@@ -8,8 +8,10 @@ import oggm.cfg as cfg
 from oggm.exceptions import InvalidParamsError, InvalidWorkflowError
 from oggm.cfg import G, GAUSSIAN_KERNEL
 from oggm import utils
+from oggm.core.inversion import find_sia_flux_from_thickness
 from scipy.linalg import solve_banded
 from functools import partial
+import copy
 
 
 class SemiImplicitModel(FlowlineModel):
@@ -174,6 +176,36 @@ class SemiImplicitModel(FlowlineModel):
         self._flux_gate_current_m3s = 0.0 # what will
         # record what enters as BC (influx) ever time step
         self.flux_gate = None
+
+        # optional thickness->flux conversion (mirrors FluxBasedModel)
+        if flux_gate_thickness is not None:
+            # Compute the theoretical ice flux from the slope at the top
+            fl = copy.deepcopy(self.fls[0])
+            fl.thick = fl.thick * 0 + flux_gate_thickness
+            slope = (fl.surface_h[0] - fl.surface_h[1]) / fl.dx_meter
+            if slope == 0:
+                raise ValueError("Need a slope to compute flux from flux_gate_thickness.")
+
+            shape = fl.shape_str[0]
+            if shape == "trapezoid":
+                # For TrapezoidalBedFlowline, lambda==0 => rectangular physics
+                # (sia_thickness only supports rectangular/parabolic)
+                if np.allclose(fl._lambdas[~np.isnan(fl._lambdas)], 0):
+                    shape = "rectangular"
+                else:
+                    raise ValueError(
+                        "flux_gate_thickness conversion needs rectangular/parabolic. "
+                        "Got trapezoid with non-zero lambda."
+                    )
+
+            flux_gate = find_sia_flux_from_thickness(
+                slope,
+                fl.widths_m[0],
+                flux_gate_thickness,
+                shape=shape,
+                glen_a=self.glen_a,
+                fs=self.fs,
+            )
 
         # Convert float->build-up callable; accept callable directly
         if flux_gate is not None:
